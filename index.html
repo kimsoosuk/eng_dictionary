@@ -681,8 +681,12 @@
 
     function scrollToBottom() {
       setTimeout(function () {
-        var end = document.getElementById('messages-end');
-        if (end) end.scrollIntoView({ behavior: 'smooth' });
+        var messagesArea = document.getElementById('messages-area');
+        if (messagesArea) {
+          // iframe 환경에서 scrollIntoView()는 부모 창 전체를 움직이게 만들 수 있으므로
+          // 메시지가 담긴 내부 컨테이너(div)의 스크롤만 부드럽게 내리도록 수정
+          messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: 'smooth' });
+        }
       }, 100);
     }
 
@@ -824,7 +828,9 @@
         input.disabled = !state.inputEnabled;
         input.placeholder = state.inputEnabled ? '답변을 입력하세요...' : '대화 진행 중...';
         input.className = 'w-full pl-3 pr-10 py-2 sm:py-3 rounded-xl border ' + (state.inputEnabled ? 'bg-gray-50 border-gray-300 focus:border-blue-500' : 'bg-gray-100 border-gray-200 cursor-not-allowed') + ' outline-none transition-colors text-[15px]';
-        if (state.inputEnabled) input.focus();
+        // 모바일/iframe 환경에서 강제 포커스(키보드 팝업) 시 화면 튕김(Jumping) 현상 방지:
+        // 자동으로 포커스를 주지 않고 사용자가 직접 입력창을 탭하도록 유도
+        // if (state.inputEnabled) input.focus();
       }
       if (submitBtn) submitBtn.disabled = !state.inputEnabled;
     }
