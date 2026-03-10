@@ -100,7 +100,7 @@
 </head>
 
 <body class="bg-gray-50">
-  <div id="app" class="w-full h-screen flex justify-center overflow-hidden text-gray-800">
+  <div id="app" class="w-full h-[100dvh] flex justify-center overflow-hidden text-gray-800">
     <div id="main-container" class="w-full max-w-md bg-white h-full flex flex-col relative shadow-xl overflow-hidden">
     </div>
   </div>
@@ -391,6 +391,8 @@
         state.recordRetryCount = 0;
         state.context = { engDef: '', phonetics: '', tempEx: '', finalData: null };
         state.evaluation = { pronunciationFeedback: '', exampleSentences: [], writing: { text: '', userWriting: '', feedback: '' } };
+        state.showHeader = true;
+        state.lastScrollY = 0;
         render();
         startLesson();
       });
@@ -496,6 +498,8 @@
         state.recordRetryCount = 0;
         state.context = { engDef: '', phonetics: '', tempEx: '', finalData: null };
         state.evaluation = { pronunciationFeedback: '', exampleSentences: [], writing: { text: '', userWriting: '', feedback: '' } };
+        state.showHeader = true;
+        state.lastScrollY = 0;
         render();
         startLesson();
         return;
@@ -703,7 +707,7 @@
       }
       if (type === 'ex1_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex1" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 1 보기</button><button type="button" data-action="skip" data-skip-type="EX1_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
       if (type === 'ex2_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex2" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 2 보기</button><button type="button" data-action="skip" data-skip-type="EX2_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
-      if (type === 'save_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border-2 border-gray-800 rounded-xl flex flex-col items-center gap-2 shadow-md relative"><button type="button" data-action="view-report" class="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 mb-2 text-sm shadow-sm"><i data-lucide="file-text" class="w-4 h-4"></i> 나의 학습 리포트 보기</button><button type="button" data-action="save" class="w-full py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 mb-4 text-sm"><i data-lucide="bookmark-plus" class="w-4 h-4"></i> 바로 단어 저장</button><button type="button" data-action="skip" data-skip-type="SAVE" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">종료 <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
+      if (type === 'save_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border-2 border-gray-800 rounded-xl flex flex-col items-center gap-2 shadow-md relative"><button type="button" data-action="view-report" class="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 mb-2 text-sm shadow-sm"><i data-lucide="file-text" class="w-4 h-4"></i> 나의 단어장 보기</button><button type="button" data-action="save" class="w-full py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 mb-4 text-sm"><i data-lucide="bookmark-plus" class="w-4 h-4"></i> 바로 단어 저장</button><button type="button" data-action="skip" data-skip-type="SAVE" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">종료 <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
       if (type === 'retry_box') return '<div id="system-' + id + '" class="my-2 p-3 bg-white border border-gray-200 rounded-xl flex justify-center gap-3 shadow-sm"><button type="button" data-action="retry-lesson" class="px-5 py-2 bg-gray-800 text-white rounded-lg font-bold text-sm hover:bg-gray-700 transition-colors flex items-center gap-2"><i data-lucide="refresh-cw" class="w-4 h-4"></i> 다시 시도</button><button type="button" data-action="go-home-btn2" class="px-5 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">홈으로</button></div>';
       return '';
     }
@@ -750,6 +754,8 @@
       state.view = 'home';
       state.currentWord = '';
       state.currentPage = 1;
+      state.showHeader = true;
+      state.lastScrollY = 0;
       render();
     }
 
@@ -807,7 +813,7 @@
         if (msgIndex !== -1) state.messages[msgIndex].base64 = base64Audio;
 
         if (boxType === 'recording_box_1') {
-          var evalPrompt = '첨부된 오디오 파일을 듣고 학생의 영어 발음을 분석해줘.\n학습 대상 단어: "' + state.currentWord + '", 발음기호: ' + state.context.phonetics + '\n현재 시도: ' + (state.recordRetryCount + 1) + '/3회\n[분석] 1. 발음 정확도 2. 강세 3. 억양\nJSON: {"feedback": "친절한 피드백 1~2문장 ' + (state.recordRetryCount >= 2 ? '(3번째이므로 격려하며 다음 단계 유도)' : '') + ' (마크다운/이모지 금지)", "retry": ' + (state.recordRetryCount >= 2 ? 'false' : 'true/false') + '}';
+          var evalPrompt = '첨부된 오디오 파일을 듣고 학생의 영어 발음을 분석해줘.\n학습 대상 단어: "' + state.currentWord + '", 발음기호: ' + state.context.phonetics + '\n현재 시도: ' + (state.recordRetryCount + 1) + '/3회\n[평가 기준] 완전히 엉뚱한 단어거나 아예 발음을 안 한 경우에 retry를 true로 주고, 완벽하진 않아도 발음이 분석 기준에 따라 통과된 수준이라면 통과(retry: false)시켜줘.\n[분석] 1. 발음 정확도 2. 강세 3. 억양\nJSON: {"feedback": "친절하고 부드러운 피드백 1~2문장 ' + (state.recordRetryCount >= 2 ? '(3번째이므로 무조건 칭찬하며 다음 단계 유도)' : '') + ' (마크다운/이모지 금지)", "retry": ' + (state.recordRetryCount >= 2 ? 'false' : 'true/false') + '}';
           var evalRes = await callGemini(evalPrompt, true, base64Audio);
           addMessage({ role: 'ai', content: evalRes.feedback });
 
@@ -968,18 +974,18 @@
       container.innerHTML = '<div class="flex-1 overflow-y-auto bg-gray-100 flex flex-col p-4">' +
         '<div class="flex items-center justify-between mb-4">' +
         '<button id="report-back-btn" class="p-2 text-gray-600 bg-white rounded-full shadow-sm hover:bg-gray-50"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>' +
-        '<div class="font-bold text-gray-800">학습 리포트</div>' +
+        '<div class="font-bold text-gray-800">나의 단어장</div>' +
         '<div class="flex gap-2">' +
         '<button id="report-pdf-btn" class="p-2 text-blue-600 bg-white rounded-full shadow-sm hover:bg-blue-50" title="PDF 다운로드"><i data-lucide="download" class="w-5 h-5"></i></button>' +
         '<button id="report-save-btn" class="p-2 text-gray-800 bg-white rounded-full shadow-sm hover:bg-gray-50" title="단어 저장"><i data-lucide="bookmark-plus" class="w-5 h-5"></i></button>' +
         '</div></div>' +
-        '<div id="pdf-content" class="bg-white rounded-xl shadow-lg p-6 sm:p-8 text-gray-800 w-full max-w-2xl mx-auto">' +
-        '<div class="flex items-center gap-4 mb-6 border-b pb-4"><img src="' + CONFIG.KIM_IMAGE_URL + '" alt="김수석" class="w-16 h-16 rounded-full border border-gray-200" /><div><h2 class="text-xl font-bold text-gray-900">오늘의 단어: <span class="text-blue-600 text-2xl capitalize">' + escapeHtml(state.currentWord) + '</span></h2><div class="text-sm text-gray-500 font-mono mt-1">[' + escapeHtml(state.context.phonetics || '') + ']</div></div></div>' +
-        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="book" class="w-5 h-5 text-blue-600"></i> 뜻과 정의</h3><div class="bg-gray-50 p-4 rounded-lg"><p class="font-bold text-gray-900 mb-1">' + escapeHtml(state.context.finalData?.pos || '단어') + '</p><ul class="list-disc pl-5 space-y-1 text-gray-700 text-[15px]">' + (state.context.finalData?.meanings || [state.context.engDef]).map(function (m) { return '<li>' + escapeHtml(m) + '</li>'; }).join('') + '</ul></div></div>' +
-        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="mic" class="w-5 h-5 text-green-600"></i> 발음 평가</h3><div class="bg-green-50/50 p-4 rounded-lg text-[15px] whitespace-pre-wrap text-gray-700 border border-green-100">' + escapeHtml(state.evaluation.pronunciationFeedback || '발음 녹음 기록이 없습니다.') + '</div></div>' +
-        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="message-circle" class="w-5 h-5 text-orange-500"></i> 예문 해석</h3><div class="space-y-4">' + (state.evaluation.exampleSentences.length > 0 ? state.evaluation.exampleSentences.map(function (ex, i) { return '<div class="bg-orange-50/30 p-4 rounded-lg border border-orange-100 text-[14px]"><p class="font-bold text-gray-900 mb-2">[예문 ' + (i + 1) + '] ' + escapeHtml(ex.text) + '</p><div class="bg-white p-3 rounded border border-gray-200 mb-2"><span class="text-xs font-bold text-gray-500 block">나의 해석</span><p class="text-gray-800">' + escapeHtml(ex.userTranslation) + '</p></div><p class="text-sm text-gray-700">' + escapeHtml(ex.feedback) + '</p></div>'; }).join('') : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
-        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="pen-tool" class="w-5 h-5 text-purple-600"></i> 영작 연습</h3><div class="bg-purple-50/30 p-4 rounded-lg border border-purple-100 text-[14px]">' + (state.evaluation.writing.text ? '<p class="font-bold text-gray-900 mb-2">' + escapeHtml(state.evaluation.writing.text) + '</p><div class="bg-white p-3 rounded border border-gray-200 mb-2"><span class="text-xs font-bold text-gray-500 block">나의 영작</span><p class="text-gray-800 font-mono">' + escapeHtml(state.evaluation.writing.userWriting) + '</p></div><p class="text-sm text-gray-700">' + escapeHtml(state.evaluation.writing.feedback) + '</p>' : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
-        '<div class="text-center text-sm text-gray-400 mt-8 border-t pt-4">Generated by 김수석 영어 사전</div>' +
+        '<div id="pdf-content" class="bg-white rounded-xl shadow-lg p-5 sm:p-6 text-gray-800 w-full max-w-2xl mx-auto">' +
+        '<div class="flex items-center gap-4 mb-4 border-b pb-3"><img src="' + CONFIG.KIM_IMAGE_URL + '" alt="김수석" class="w-14 h-14 rounded-full border border-gray-200" /><div><h2 class="text-xl font-bold text-gray-900">오늘의 단어: <span class="text-blue-600 text-2xl capitalize">' + escapeHtml(state.currentWord) + '</span></h2><div class="text-sm text-gray-500 font-mono mt-1">[' + escapeHtml(state.context.phonetics || '') + ']</div></div></div>' +
+        '<div class="mb-4"><h3 class="text-base font-bold flex items-center gap-2 mb-2"><i data-lucide="book" class="w-4 h-4 text-blue-600"></i> 뜻과 정의</h3><div class="bg-gray-50 p-3 rounded-lg"><p class="font-bold text-gray-900 mb-1">' + escapeHtml(state.context.finalData?.pos || '단어') + '</p><ul class="list-disc pl-5 space-y-1 text-gray-700 text-[14px]">' + (state.context.finalData?.meanings || [state.context.engDef]).map(function (m) { return '<li>' + escapeHtml(m) + '</li>'; }).join('') + '</ul></div></div>' +
+        '<div class="mb-4"><h3 class="text-base font-bold flex items-center gap-2 mb-2"><i data-lucide="mic" class="w-4 h-4 text-green-600"></i> 발음 평가</h3><div class="bg-green-50/50 p-3 rounded-lg text-[14px] whitespace-pre-wrap text-gray-700 border border-green-100">' + escapeHtml(state.evaluation.pronunciationFeedback || '발음 녹음 기록이 없습니다.') + '</div></div>' +
+        '<div class="mb-4"><h3 class="text-base font-bold flex items-center gap-2 mb-2"><i data-lucide="message-circle" class="w-4 h-4 text-orange-500"></i> 예문 해석</h3><div class="space-y-3">' + (state.evaluation.exampleSentences.length > 0 ? state.evaluation.exampleSentences.map(function (ex, i) { return '<div class="bg-orange-50/30 p-3 rounded-lg border border-orange-100 text-[13px]"><p class="font-bold text-gray-900 mb-1">[예문 ' + (i + 1) + '] ' + escapeHtml(ex.text) + '</p><div class="bg-white p-2 rounded border border-gray-200 mb-1"><span class="text-[11px] font-bold text-gray-500 block">나의 해석</span><p class="text-gray-800">' + escapeHtml(ex.userTranslation) + '</p></div><p class="text-[13px] text-gray-700">' + escapeHtml(ex.feedback) + '</p></div>'; }).join('') : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
+        '<div class="mb-4"><h3 class="text-base font-bold flex items-center gap-2 mb-2"><i data-lucide="pen-tool" class="w-4 h-4 text-purple-600"></i> 영작 연습</h3><div class="bg-purple-50/30 p-3 rounded-lg border border-purple-100 text-[13px]">' + (state.evaluation.writing.text ? '<p class="font-bold text-gray-900 mb-1">' + escapeHtml(state.evaluation.writing.text) + '</p><div class="bg-white p-2 rounded border border-gray-200 mb-1"><span class="text-[11px] font-bold text-gray-500 block">나의 영작</span><p class="text-gray-800 font-mono">' + escapeHtml(state.evaluation.writing.userWriting) + '</p></div><p class="text-[13px] text-gray-700">' + escapeHtml(state.evaluation.writing.feedback) + '</p>' : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
+        '<div class="text-center text-xs text-gray-400 mt-4 border-t pt-3">Generated by 김수석 영어 사전</div>' +
         '</div></div>';
       lucide.createIcons();
       document.getElementById('report-back-btn').addEventListener('click', function () { state.view = 'chat'; render(); scrollToBottom(); });
@@ -992,7 +998,7 @@
       if (!element) return;
       showToast('PDF 생성 중...');
       if (typeof html2pdf === 'undefined') { showToast('PDF 라이브러리 로드 실패'); return; }
-      html2pdf().set({ margin: 10, filename: '학습리포트_' + state.currentWord + '.pdf', image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(element).save().then(function () { showToast('PDF 다운로드 완료!'); }).catch(function (err) { console.error('PDF 생성 오류:', err); showToast('PDF 생성 실패'); });
+      html2pdf().set({ margin: 10, filename: '단어장_' + state.currentWord + '.pdf', image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(element).save().then(function () { showToast('PDF 다운로드 완료!'); }).catch(function (err) { console.error('PDF 생성 오류:', err); showToast('PDF 생성 실패'); });
     }
 
     // =====================
