@@ -90,6 +90,12 @@
         transform: translateX(-50%) translateY(0);
       }
     }
+
+    /* 녹음 버튼 터치 영역 확대 */
+    .record-btn {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
   </style>
 </head>
 
@@ -119,7 +125,7 @@
       API_TIMEOUT_MS: 38000,
       MAX_RETRIES: 2,
       WORD_PATTERN: /^[a-zA-Z\s'\-]{1,50}$/,
-      MAX_VOCAB_SIZE: 500 // localStorage 용량 초과 방지
+      MAX_VOCAB_SIZE: 500
     };
 
     // =====================
@@ -141,10 +147,12 @@
       lastScrollY: 0,
       context: { engDef: '', phonetics: '', tempEx: '', finalData: null },
       evaluation: { pronunciationFeedback: '', exampleSentences: [], writing: { text: '', userWriting: '', feedback: '' } },
+      // 녹음 관련
       mediaRecorder: null,
       audioChunks: [],
       isRecording: false,
       currentStream: null,
+      currentRecordingType: null, // 'recording_box_1' | 'recording_box_2'
       blobUrls: [],
       ttsVoicesLoaded: false
     };
@@ -155,14 +163,9 @@
         const saved = localStorage.getItem('vocabList');
         if (saved) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            state.vocabList = parsed.slice(0, CONFIG.MAX_VOCAB_SIZE);
-          }
+          if (Array.isArray(parsed)) state.vocabList = parsed.slice(0, CONFIG.MAX_VOCAB_SIZE);
         }
-      } catch (e) {
-        console.warn('단어장 로드 실패:', e);
-        state.vocabList = [];
-      }
+      } catch (e) { state.vocabList = []; }
     })();
 
     // =====================
@@ -170,24 +173,12 @@
     // =====================
     function saveVocabList() {
       try {
-        // 용량 초과 방지
-        if (state.vocabList.length > CONFIG.MAX_VOCAB_SIZE) {
-          state.vocabList = state.vocabList.slice(0, CONFIG.MAX_VOCAB_SIZE);
-        }
+        if (state.vocabList.length > CONFIG.MAX_VOCAB_SIZE) state.vocabList = state.vocabList.slice(0, CONFIG.MAX_VOCAB_SIZE);
         localStorage.setItem('vocabList', JSON.stringify(state.vocabList));
       } catch (e) {
-        console.warn('localStorage 저장 실패:', e);
         if (e.name === 'QuotaExceededError') {
-          // 오래된 단어 삭제 후 재시도
           state.vocabList = state.vocabList.slice(0, Math.floor(state.vocabList.length / 2));
-          try {
-            localStorage.setItem('vocabList', JSON.stringify(state.vocabList));
-            showToast('저장 공간 부족으로 오래된 단어 일부가 삭제되었습니다.');
-          } catch (e2) {
-            showToast('단어장 저장에 실패했습니다.');
-          }
-        } else {
-          showToast('단어장 저장에 실패했습니다.');
+          try { localStorage.setItem('vocabList', JSON.stringify(state.vocabList)); } catch (e2) { }
         }
       }
     }
@@ -229,16 +220,6 @@
       toast.textContent = message;
       document.body.appendChild(toast);
       setTimeout(() => { if (toast.parentNode) toast.remove(); }, duration);
-    }
-
-    function checkBrowserSupport() {
-      return {
-        mediaRecorder: typeof MediaRecorder !== 'undefined',
-        getUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
-        speechSynthesis: 'speechSynthesis' in window,
-        localStorage: (() => { try { localStorage.setItem('t', 't'); localStorage.removeItem('t'); return true; } catch (e) { return false; } })(),
-        secureContext: window.isSecureContext
-      };
     }
 
     function getRecordingMimeType() {
@@ -407,7 +388,9 @@
             </form>
           </div>
         </div>`;
+
       document.getElementById('go-home-btn').addEventListener('click', goHome);
+
       const messagesArea = document.getElementById('messages-area');
       messagesArea.addEventListener('scroll', (e) => {
         const currentScrollY = e.target.scrollTop;
@@ -415,11 +398,89 @@
         else if (currentScrollY < state.lastScrollY) { state.showHeader = true; document.getElementById('chat-header')?.classList.remove('-translate-y-full'); }
         state.lastScrollY = currentScrollY;
       });
+
+      lucide.createIcons();
       scrollToBottom();
     }
 
-    // 전역 이벤트 위임
-    document.addEventListener('submit', (e) => {
+    // =====================
+    // ⭐ 전역 이벤트 위임 (핵심 수정)
+    // =====================
+    document.addEventListener('click', function (e) {
+      // 녹음 버튼 클릭 감지 - 이벤트 버블링으로 처리
+      const recordBtn = e.target.closest('[data-action="record"]');
+      if (recordBtn) {
+        // ⭐ 핵심: preventDefault 호출하지 않음!
+        // ⭐ 핵심: 즉시 녹음 로직 실행 (함수 호출 최소화)
+        handleRecordClick(recordBtn);
+        return;
+      }
+
+      // Skip 버튼
+      const skipBtn = e.target.closest('[data-action="skip"]');
+      if (skipBtn) {
+        handleSkip(skipBtn.dataset.skipType);
+        return;
+      }
+
+      // TTS 버튼
+      if (e.target.closest('[data-action="tts-play"]')) {
+        playTTS(state.currentWord);
+        return;
+      }
+
+      // TTS 다음 버튼
+      if (e.target.closest('[data-action="tts-next"]')) {
+        transitionToRecord2();
+        return;
+      }
+
+      // 예문 버튼
+      if (e.target.closest('[data-action="ex1"]')) {
+        triggerEx1();
+        return;
+      }
+      if (e.target.closest('[data-action="ex2"]')) {
+        triggerEx2();
+        return;
+      }
+
+      // 저장 버튼
+      if (e.target.closest('[data-action="save"]')) {
+        saveWord();
+        return;
+      }
+
+      // 리포트 버튼
+      if (e.target.closest('[data-action="view-report"]')) {
+        state.view = 'report';
+        render();
+        return;
+      }
+
+      // 재시도 버튼
+      if (e.target.closest('[data-action="retry-lesson"]')) {
+        state.messages = [];
+        state.chatStep = 'INIT';
+        state.isTyping = false;
+        state.retryCount = 0;
+        state.recordRetryCount = 0;
+        state.context = { engDef: '', phonetics: '', tempEx: '', finalData: null };
+        state.evaluation = { pronunciationFeedback: '', exampleSentences: [], writing: { text: '', userWriting: '', feedback: '' } };
+        render();
+        startLesson();
+        return;
+      }
+
+      // 홈으로 버튼
+      if (e.target.closest('[data-action="go-home-btn2"]')) {
+        goHome();
+        return;
+      }
+    });
+
+    // 채팅 폼 제출
+    document.addEventListener('submit', function (e) {
       if (e.target && e.target.id === 'chat-form') {
         e.preventDefault();
         const inputEl = document.getElementById('chat-input');
@@ -427,10 +488,148 @@
         handleUserTextSubmit();
       }
     });
-    document.addEventListener('input', (e) => { if (e.target && e.target.id === 'chat-input') state.inputText = e.target.value; });
 
+    // 채팅 입력
+    document.addEventListener('input', function (e) {
+      if (e.target && e.target.id === 'chat-input') {
+        state.inputText = e.target.value;
+      }
+    });
+
+    // =====================
+    // ⭐ 녹음 클릭 핸들러 (모바일 최적화)
+    // =====================
+    function handleRecordClick(btn) {
+      const type = btn.dataset.type;
+
+      // 녹음 중이면 중지
+      if (state.isRecording) {
+        stopRecording();
+        return;
+      }
+
+      // ⭐ 핵심: 조건 체크를 최소화하고 즉시 getUserMedia 호출
+      // 보안 컨텍스트 확인만 수행 (가장 중요한 체크)
+      if (!window.isSecureContext) {
+        showToast('HTTPS 환경에서만 녹음이 가능합니다.');
+        return;
+      }
+
+      // API 지원 확인
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast('이 브라우저에서는 녹음을 지원하지 않습니다.');
+        return;
+      }
+
+      // 녹음 타입 저장
+      state.currentRecordingType = type;
+
+      // UI 업데이트 (녹음 시작 전)
+      const label = btn.closest('.relative')?.querySelector('.record-label');
+      if (label) label.textContent = '마이크 연결 중...';
+      btn.classList.add('opacity-50');
+
+      // ⭐ 핵심: getUserMedia를 즉시 호출 (Promise 체이닝)
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(function (stream) {
+          // 이전 스트림 정리
+          if (state.currentStream) {
+            state.currentStream.getTracks().forEach(function (track) { track.stop(); });
+          }
+          state.currentStream = stream;
+
+          // MediaRecorder 생성
+          var mimeType = getRecordingMimeType();
+          var recorder;
+          try {
+            recorder = mimeType ? new MediaRecorder(stream, { mimeType: mimeType }) : new MediaRecorder(stream);
+          } catch (err) {
+            recorder = new MediaRecorder(stream);
+          }
+
+          state.mediaRecorder = recorder;
+          state.audioChunks = [];
+
+          recorder.ondataavailable = function (e) {
+            if (e.data && e.data.size > 0) {
+              state.audioChunks.push(e.data);
+            }
+          };
+
+          recorder.onstop = function () {
+            var actualMimeType = recorder.mimeType || mimeType || 'audio/webm';
+            var audioBlob = new Blob(state.audioChunks, { type: actualMimeType });
+
+            // 스트림 정리
+            if (state.currentStream) {
+              state.currentStream.getTracks().forEach(function (track) { track.stop(); });
+              state.currentStream = null;
+            }
+
+            // 녹음 완료 처리
+            handleRecordingComplete(audioBlob, state.currentRecordingType);
+          };
+
+          recorder.onerror = function (err) {
+            console.error('MediaRecorder 에러:', err);
+            showToast('녹음 중 오류가 발생했습니다.');
+            state.isRecording = false;
+            resetRecordButtonUI(btn);
+          };
+
+          // 녹음 시작
+          recorder.start();
+          state.isRecording = true;
+
+          // UI 업데이트 - 녹음 중
+          btn.classList.remove('opacity-50', 'bg-gray-800', 'hover:bg-gray-700');
+          btn.classList.add('bg-red-500', 'animate-pulse');
+          btn.innerHTML = '<i data-lucide="mic-off" class="w-6 h-6"></i>';
+          if (label) label.textContent = '녹음 중... 다시 눌러 완료';
+          lucide.createIcons();
+        })
+        .catch(function (err) {
+          console.error('마이크 접근 실패:', err);
+          resetRecordButtonUI(btn);
+
+          // 에러 메시지
+          var message = '마이크 접근에 실패했습니다.';
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            message = '마이크 권한이 필요합니다.\n\n브라우저 주소창의 🔒 아이콘을 눌러\n마이크 권한을 허용해주세요.';
+          } else if (err.name === 'NotFoundError') {
+            message = '마이크를 찾을 수 없습니다.';
+          } else if (err.name === 'NotReadableError') {
+            message = '마이크가 다른 앱에서 사용 중입니다.';
+          }
+          showToast(message, 5000);
+        });
+    }
+
+    function resetRecordButtonUI(btn) {
+      btn.classList.remove('opacity-50', 'bg-red-500', 'animate-pulse');
+      btn.classList.add('bg-gray-800', 'hover:bg-gray-700');
+      btn.innerHTML = '<i data-lucide="mic" class="w-6 h-6"></i>';
+      var label = btn.closest('.relative')?.querySelector('.record-label');
+      if (label) label.textContent = '버튼을 눌러 녹음 시작';
+      lucide.createIcons();
+    }
+
+    function stopRecording() {
+      if (state.mediaRecorder && state.isRecording) {
+        try {
+          state.mediaRecorder.stop();
+        } catch (e) {
+          console.error('녹음 중지 실패:', e);
+        }
+        state.isRecording = false;
+      }
+    }
+
+    // =====================
+    // 메시지 렌더링
+    // =====================
     function renderMessages() {
-      return state.messages.map(msg => {
+      return state.messages.map(function (msg) {
         if (msg.role === 'ai') return renderAiBubble(msg.content);
         if (msg.role === 'user' && msg.type !== 'audio') return renderUserBubble(msg.content);
         if (msg.role === 'user' && msg.type === 'audio') return renderUserAudioBubble(msg.base64 || msg.blobUrl);
@@ -440,86 +639,104 @@
     }
 
     function renderAiBubble(content) {
-      return `<div class="flex items-start gap-2 sm:gap-3 w-full max-w-[95%] sm:max-w-[90%]"><img src="${CONFIG.KIM_IMAGE_URL}" alt="김수석" class="w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-gray-200 shadow-sm object-cover shrink-0 mt-1" /><div class="bg-white p-3 sm:p-4 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 text-gray-800 leading-relaxed whitespace-pre-wrap text-[14px] sm:text-[15px]">${escapeHtml(content)}</div></div>`;
+      return '<div class="flex items-start gap-2 sm:gap-3 w-full max-w-[95%] sm:max-w-[90%]"><img src="' + CONFIG.KIM_IMAGE_URL + '" alt="김수석" class="w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-gray-200 shadow-sm object-cover shrink-0 mt-1" /><div class="bg-white p-3 sm:p-4 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 text-gray-800 leading-relaxed whitespace-pre-wrap text-[14px] sm:text-[15px]">' + escapeHtml(content) + '</div></div>';
     }
+
     function renderUserBubble(content) {
-      return `<div class="flex justify-end w-full"><div class="bg-gray-800 text-white p-3 sm:p-4 rounded-2xl rounded-tr-none shadow-sm max-w-[90%] sm:max-w-[85%] text-[14px] sm:text-[15px] leading-relaxed break-words">${escapeHtml(content)}</div></div>`;
+      return '<div class="flex justify-end w-full"><div class="bg-gray-800 text-white p-3 sm:p-4 rounded-2xl rounded-tr-none shadow-sm max-w-[90%] sm:max-w-[85%] text-[14px] sm:text-[15px] leading-relaxed break-words">' + escapeHtml(content) + '</div></div>';
     }
+
     function renderUserAudioBubble(srcUrl) {
       if (!srcUrl) return '<div class="flex justify-end w-full"><div class="bg-gray-800 text-white p-3 rounded-2xl rounded-tr-none text-sm">녹음 파일</div></div>';
-      return `<div class="flex justify-end w-full"><div class="bg-gray-800 p-2 sm:p-3 rounded-2xl rounded-tr-none shadow-sm max-w-[85%] flex items-center shrink-0"><audio src="${srcUrl}" controls class="h-8 sm:h-10 w-40 sm:w-48"></audio></div></div>`;
+      return '<div class="flex justify-end w-full"><div class="bg-gray-800 p-2 sm:p-3 rounded-2xl rounded-tr-none shadow-sm max-w-[85%] flex items-center shrink-0"><audio src="' + srcUrl + '" controls class="h-8 sm:h-10 w-40 sm:w-48"></audio></div></div>';
     }
+
     function renderTypingIndicator() {
-      return `<div class="flex items-start gap-3 w-full mt-4"><img src="${CONFIG.KIM_IMAGE_URL}" alt="김수석" class="w-10 h-10 rounded-full border border-gray-200" /><div class="bg-white p-4 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 flex items-center gap-1"><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div></div></div>`;
+      return '<div class="flex items-start gap-3 w-full mt-4"><img src="' + CONFIG.KIM_IMAGE_URL + '" alt="김수석" class="w-10 h-10 rounded-full border border-gray-200" /><div class="bg-white p-4 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 flex items-center gap-1"><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div></div></div>';
     }
 
     function renderSystemBox(type, id) {
       if (type === 'recording_box_1' || type === 'recording_box_2') {
-        return `<div id="system-${id}" class="my-2 p-4 bg-white border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><p class="text-sm font-bold text-gray-700 mb-1">직접 소리내어 읽어볼까?</p><button type="button" data-action="record" data-type="${type}" data-id="${id}" class="record-btn p-3 rounded-full flex items-center justify-center transition-all shadow-md bg-gray-800 text-white hover:bg-gray-700 active:scale-95"><i data-lucide="mic" class="w-6 h-6"></i></button><p class="record-label text-xs text-gray-500">버튼을 눌러 녹음 시작</p><button type="button" data-action="skip" data-skip-type="${type === 'recording_box_1' ? 'RECORDING_1' : 'RECORDING_2'}" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>`;
+        return '<div id="system-' + id + '" class="my-2 p-4 bg-white border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center gap-2 shadow-sm relative">' +
+          '<p class="text-sm font-bold text-gray-700 mb-1">직접 소리내어 읽어볼까?</p>' +
+          '<button type="button" data-action="record" data-type="' + type + '" data-id="' + id + '" class="record-btn p-3 rounded-full flex items-center justify-center transition-all shadow-md bg-gray-800 text-white hover:bg-gray-700 active:scale-95">' +
+          '<i data-lucide="mic" class="w-6 h-6"></i></button>' +
+          '<p class="record-label text-xs text-gray-500">버튼을 눌러 녹음 시작</p>' +
+          '<button type="button" data-action="skip" data-skip-type="' + (type === 'recording_box_1' ? 'RECORDING_1' : 'RECORDING_2') + '" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button>' +
+          '</div>';
       }
       if (type === 'tts_box') {
-        return `<div id="system-${id}" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-3 shadow-sm relative"><p class="text-sm font-bold text-gray-700">원어민 발음도 들어보자.</p>${state.context.phonetics ? `<p class="text-[15px] font-mono text-blue-600 bg-blue-50 px-2 py-1 rounded-md">[${escapeHtml(state.context.phonetics)}]</p>` : ''}<button type="button" data-action="tts-play" class="p-2 sm:p-3 bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors shadow-sm flex items-center gap-2 px-4 font-semibold text-sm"><i data-lucide="volume-2" class="w-4 h-4"></i> 발음 듣기</button><button type="button" data-action="tts-next" class="absolute bottom-2 right-3 text-xs text-gray-500 font-medium hover:text-gray-800 flex items-center gap-1">다음으로 <i data-lucide="arrow-right" class="w-3 h-3"></i></button></div>`;
+        return '<div id="system-' + id + '" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-3 shadow-sm relative">' +
+          '<p class="text-sm font-bold text-gray-700">원어민 발음도 들어보자.</p>' +
+          (state.context.phonetics ? '<p class="text-[15px] font-mono text-blue-600 bg-blue-50 px-2 py-1 rounded-md">[' + escapeHtml(state.context.phonetics) + ']</p>' : '') +
+          '<button type="button" data-action="tts-play" class="p-2 sm:p-3 bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors shadow-sm flex items-center gap-2 px-4 font-semibold text-sm"><i data-lucide="volume-2" class="w-4 h-4"></i> 발음 듣기</button>' +
+          '<button type="button" data-action="tts-next" class="absolute bottom-2 right-3 text-xs text-gray-500 font-medium hover:text-gray-800 flex items-center gap-1">다음으로 <i data-lucide="arrow-right" class="w-3 h-3"></i></button></div>';
       }
-      if (type === 'ex1_box') return `<div id="system-${id}" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex1" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 1 보기</button><button type="button" data-action="skip" data-skip-type="EX1_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>`;
-      if (type === 'ex2_box') return `<div id="system-${id}" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex2" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 2 보기</button><button type="button" data-action="skip" data-skip-type="EX2_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>`;
-      if (type === 'save_box') return `<div id="system-${id}" class="my-2 p-4 bg-white border-2 border-gray-800 rounded-xl flex flex-col items-center gap-2 shadow-md relative"><button type="button" data-action="view-report" class="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 mb-2 text-sm shadow-sm"><i data-lucide="file-text" class="w-4 h-4"></i> 나의 학습 리포트 보기</button><button type="button" data-action="save" class="w-full py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 mb-4 text-sm"><i data-lucide="bookmark-plus" class="w-4 h-4"></i> 바로 단어 저장</button><button type="button" data-action="skip" data-skip-type="SAVE" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">종료 <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>`;
-      if (type === 'retry_box') return `<div id="system-${id}" class="my-2 p-3 bg-white border border-gray-200 rounded-xl flex justify-center gap-3 shadow-sm"><button type="button" data-action="retry-lesson" class="px-5 py-2 bg-gray-800 text-white rounded-lg font-bold text-sm hover:bg-gray-700 transition-colors flex items-center gap-2"><i data-lucide="refresh-cw" class="w-4 h-4"></i> 다시 시도</button><button type="button" data-action="go-home-btn2" class="px-5 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">홈으로</button></div>`;
+      if (type === 'ex1_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex1" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 1 보기</button><button type="button" data-action="skip" data-skip-type="EX1_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
+      if (type === 'ex2_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex2" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 2 보기</button><button type="button" data-action="skip" data-skip-type="EX2_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
+      if (type === 'save_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border-2 border-gray-800 rounded-xl flex flex-col items-center gap-2 shadow-md relative"><button type="button" data-action="view-report" class="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 mb-2 text-sm shadow-sm"><i data-lucide="file-text" class="w-4 h-4"></i> 나의 학습 리포트 보기</button><button type="button" data-action="save" class="w-full py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 mb-4 text-sm"><i data-lucide="bookmark-plus" class="w-4 h-4"></i> 바로 단어 저장</button><button type="button" data-action="skip" data-skip-type="SAVE" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">종료 <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
+      if (type === 'retry_box') return '<div id="system-' + id + '" class="my-2 p-3 bg-white border border-gray-200 rounded-xl flex justify-center gap-3 shadow-sm"><button type="button" data-action="retry-lesson" class="px-5 py-2 bg-gray-800 text-white rounded-lg font-bold text-sm hover:bg-gray-700 transition-colors flex items-center gap-2"><i data-lucide="refresh-cw" class="w-4 h-4"></i> 다시 시도</button><button type="button" data-action="go-home-btn2" class="px-5 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">홈으로</button></div>';
       return '';
     }
 
-    function setupSystemBoxListeners() {
-      document.querySelectorAll('[data-action="skip"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); handleSkip(btn.dataset.skipType); }; });
-
-      // ⭐ 핵심: 녹음 버튼 - onclick으로 직접 바인딩 (addEventListener 대신)
-      document.querySelectorAll('[data-action="record"]').forEach(btn => {
-        btn.onclick = function (e) {
-          // input=file에서 발생한 클릭(버블링)이면 무시하고 기본 탐색기가 열리도록 냅둠
-          if (e.target.tagName && e.target.tagName.toLowerCase() === 'input') return;
-          
-          e.preventDefault();
-          if (state.isRecording) stopRecording(this.dataset.type);
-          else startRecording(this, this.dataset.type, this.dataset.id);
-        };
-      });
-
-      document.querySelectorAll('[data-action="tts-play"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); playTTS(state.currentWord); }; });
-      document.querySelectorAll('[data-action="tts-next"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); transitionToRecord2(); }; });
-      document.querySelectorAll('[data-action="ex1"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); triggerEx1(); }; });
-      document.querySelectorAll('[data-action="ex2"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); triggerEx2(); }; });
-      document.querySelectorAll('[data-action="save"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); saveWord(); }; });
-      document.querySelectorAll('[data-action="view-report"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); state.view = 'report'; render(); }; });
-      document.querySelectorAll('[data-action="retry-lesson"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); state.messages = []; state.chatStep = 'INIT'; state.isTyping = false; state.retryCount = 0; state.recordRetryCount = 0; state.context = { engDef: '', phonetics: '', tempEx: '', finalData: null }; state.evaluation = { pronunciationFeedback: '', exampleSentences: [], writing: { text: '', userWriting: '', feedback: '' } }; render(); startLesson(); }; });
-      document.querySelectorAll('[data-action="go-home-btn2"]').forEach(btn => { btn.onclick = (e) => { e.preventDefault(); goHome(); }; });
+    function scrollToBottom() {
+      setTimeout(function () {
+        var end = document.getElementById('messages-end');
+        if (end) end.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
     }
 
-    function scrollToBottom() { setTimeout(() => { document.getElementById('messages-end')?.scrollIntoView({ behavior: 'smooth' }); }, 100); }
-    function addMessage(msg) { state.messages.push({ id: generateId(), ...msg }); renderChatMessages(); }
+    function addMessage(msg) {
+      state.messages.push({ id: generateId(), role: msg.role, content: msg.content, type: msg.type, blobUrl: msg.blobUrl, base64: msg.base64 });
+      renderChatMessages();
+    }
+
     function renderChatMessages() {
-      const messagesArea = document.getElementById('messages-area');
+      var messagesArea = document.getElementById('messages-area');
       if (messagesArea) {
-        messagesArea.innerHTML = `${renderMessages()}${state.isTyping ? renderTypingIndicator() : ''}<div id="messages-end"></div>`;
+        messagesArea.innerHTML = renderMessages() + (state.isTyping ? renderTypingIndicator() : '') + '<div id="messages-end"></div>';
         lucide.createIcons();
-        setupSystemBoxListeners();
         scrollToBottom();
       }
     }
-    function setTyping(val) { state.isTyping = val; renderChatMessages(); }
 
-    function goHome() {
-      if (state.isRecording && state.mediaRecorder) { try { state.mediaRecorder.stop(); } catch (e) { } state.isRecording = false; }
-      if (state.currentStream) { state.currentStream.getTracks().forEach(track => track.stop()); state.currentStream = null; }
-      state.view = 'home'; state.currentWord = ''; state.currentPage = 1; render();
+    function setTyping(val) {
+      state.isTyping = val;
+      renderChatMessages();
     }
 
+    function goHome() {
+      if (state.isRecording && state.mediaRecorder) {
+        try { state.mediaRecorder.stop(); } catch (e) { }
+        state.isRecording = false;
+      }
+      if (state.currentStream) {
+        state.currentStream.getTracks().forEach(function (track) { track.stop(); });
+        state.currentStream = null;
+      }
+      state.view = 'home';
+      state.currentWord = '';
+      state.currentPage = 1;
+      render();
+    }
+
+    // =====================
+    // 레슨 로직
+    // =====================
     async function startLesson() {
       setTyping(true);
       try {
-        const prompt = `영어 단어 "${state.currentWord}"에 대해 다음을 JSON 형태로 제공해줘. {"intro": "가벼운 1문장 (뜻/예문 언급 금지)", "phonetics": "IPA 발음기호", "eng_def": "영영사전 뜻"}`;
-        const data = await callGemini(prompt, true);
+        var prompt = '영어 단어 "' + state.currentWord + '"에 대해 다음을 JSON 형태로 제공해줘. {"intro": "가벼운 1문장 (뜻/예문 언급 금지)", "phonetics": "IPA 발음기호", "eng_def": "영영사전 뜻"}';
+        var data = await callGemini(prompt, true);
         state.context.engDef = data.eng_def;
         state.context.phonetics = data.phonetics;
-        addMessage({ role: 'ai', content: `${data.intro} 먼저 발음 기호를 알려줄게.` });
-        setTimeout(() => { addMessage({ role: 'ai', content: `[ ${data.phonetics} ]` }); addMessage({ role: 'system', type: 'recording_box_1' }); state.chatStep = 'WAIT_RECORD_1'; setTyping(false); }, 1000);
+        addMessage({ role: 'ai', content: data.intro + ' 먼저 발음 기호를 알려줄게.' });
+        setTimeout(function () {
+          addMessage({ role: 'ai', content: '[ ' + data.phonetics + ' ]' });
+          addMessage({ role: 'system', type: 'recording_box_1' });
+          state.chatStep = 'WAIT_RECORD_1';
+          setTyping(false);
+        }, 1000);
       } catch (e) {
         addMessage({ role: 'ai', content: '네트워크가 원활하지 않네. 잠시 후 다시 시도해볼까?' });
         addMessage({ role: 'system', type: 'retry_box' });
@@ -537,212 +754,46 @@
       }
     }
 
-    // =====================
-    // ⭐ 녹음 기능 (모바일 호환성 핵심 수정)
-    // =====================
-    /**
-     * 동기 함수로 녹음 시작 - iOS Safari 사용자 제스처 컨텍스트 유지 및 폴백 제공
-     * async/await 대신 Promise.then() 체이닝 사용
-     */
-    function startRecording(btn, type, id) {
-      // 1. 보안 컨텍스트 확인 (HTTPS 필수)
-      if (!window.isSecureContext) {
-        showToast('HTTPS 환경에서만 브라우저 마이크 접근이 가능합니다.', 4000);
-        showFallbackInput(btn, type, '대안으로 파일 첨부/기본 녹음기를 띄웁니다.');
-        return;
-      }
-
-      // 모바일 인앱 브라우저 감지 (카카오톡, 네이버, 인스타그램 등)
-      const userAgent = navigator.userAgent.toLowerCase();
-      const inAppBrowser = /kakaotalk|instagram|fban|fbav|line|naver|daum/i.test(userAgent);
-      
-      if (inAppBrowser) {
-        // 인앱 브라우저는 getUserMedia가 막힌 경우가 많으므로 바로 폴백 실행
-        showFallbackInput(btn, type, '인앱 브라우저 보안 정책에 따라 파일 업로드(녹음기)로 자동 전환합니다.');
-        return;
-      }
-
-      // 2. API 지원 확인
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
-        showFallbackInput(btn, type, '브라우저 녹음이 지원되지 않아 파일 업로드 폴백으로 전환합니다.');
-        return;
-      }
-
-      // 3. UI 즉시 업데이트 (사용자 피드백)
-      btn.classList.add('opacity-50');
-      btn.disabled = true;
-      const label = btn.parentElement.querySelector('.record-label');
-      if (label) label.textContent = '마이크 연결 중...';
-
-      // 4. getUserMedia - ⭐ Promise.then() 체이닝 (async/await 사용 안 함!)
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(function (stream) {
-          // 이전 스트림 정리
-          if (state.currentStream && state.currentStream !== stream) {
-            state.currentStream.getTracks().forEach(track => track.stop());
-          }
-          state.currentStream = stream;
-
-          // MIME 타입 선택
-          const mimeType = getRecordingMimeType();
-          let recorder;
-          try {
-            recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-          } catch (e) {
-            recorder = new MediaRecorder(stream);
-          }
-          state.mediaRecorder = recorder;
-          state.audioChunks = [];
-
-          recorder.ondataavailable = function (e) {
-            if (e.data && e.data.size > 0) state.audioChunks.push(e.data);
-          };
-
-          recorder.onstop = function () {
-            const actualMimeType = recorder.mimeType || mimeType || 'audio/webm';
-            const audioBlob = new Blob(state.audioChunks, { type: actualMimeType });
-            if (state.currentStream) { state.currentStream.getTracks().forEach(track => track.stop()); state.currentStream = null; }
-            handleRecordingComplete(audioBlob, type);
-          };
-
-          recorder.onerror = function (e) {
-            console.error('MediaRecorder 에러:', e);
-            showFallbackInput(btn, type, '녹음 중 오류가 발생하여 오프라인 모드로 전환합니다.');
-            state.isRecording = false;
-          };
-
-          // 녹음 시작
-          recorder.start();
-          state.isRecording = true;
-
-          // UI 업데이트 - 녹음 중
-          btn.classList.remove('opacity-50', 'bg-gray-800', 'hover:bg-gray-700');
-          btn.classList.add('bg-red-500', 'animate-pulse');
-          btn.disabled = false;
-          btn.innerHTML = '<i data-lucide="mic-off" class="w-6 h-6"></i>';
-          if (label) label.textContent = '녹음 중... 다시 눌러 완료';
-          lucide.createIcons();
-        })
-        .catch(function (err) {
-          console.error('마이크 접근 실패:', err);
-          let message = '마이크 접근에 실패했습니다.';
-          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-            message = '마이크 권한이 차단되었습니다. 대신 기본 녹음앱 호출 버튼을 엽니다.';
-          } else if (err.name === 'NotFoundError') {
-            message = '마이크 모듈을 찾을 수 없어 파일 첨부 기능으로 전환합니다.';
-          } else {
-            message = `권한 문제(${err.name})로 파일 첨부 폴백 기능으로 전환합니다.`;
-          }
-          showFallbackInput(btn, type, message);
-        });
-    }
-
-    function showFallbackInput(btn, type, alertMessage) {
-      resetRecordButton(btn);
-      if (alertMessage) showToast(alertMessage, 4500);
-      
-      btn.classList.add('relative', 'overflow-hidden', 'bg-blue-600', 'hover:bg-blue-700', 'active:scale-95');
-      btn.classList.remove('bg-gray-800', 'hover:bg-gray-700', 'opacity-50', 'bg-red-500', 'animate-pulse');
-      btn.innerHTML = '<i data-lucide="folder-open" class="w-6 h-6 text-white"></i>';
-      
-      const label = btn.parentElement.querySelector('.record-label');
-      if (label) {
-        label.innerHTML = '<span class="text-blue-600 font-bold text-[13px]">오프라인 녹음기로 전환됨</span><br/>터치해서 파일/녹음 추가';
-      }
-
-      const existingInput = btn.querySelector('input[type="file"]');
-      if (existingInput) existingInput.remove();
-
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = 'audio/*';
-      fileInput.className = 'absolute inset-0 w-full h-full opacity-0 cursor-pointer';
-      
-      fileInput.onchange = function(e) {
-        const file = e.target.files[0];
-        if (file) {
-          showToast('오디오 파일을 분석 중입니다...', 2000);
-          resetRecordButton(btn); // 로딩 UI를 위해 초기 상태로 복귀
-          btn.classList.add('opacity-50');
-          btn.innerHTML = '<div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>';
-          handleRecordingComplete(file, type);
-        }
-      };
-      
-      btn.appendChild(fileInput);
-      lucide.createIcons();
-    }
-
-    function resetRecordButton(btn) {
-      btn.classList.remove('opacity-50', 'bg-red-500', 'animate-pulse', 'relative', 'overflow-hidden', 'bg-blue-600', 'hover:bg-blue-700');
-      btn.classList.add('bg-gray-800', 'hover:bg-gray-700', 'active:scale-95');
-      btn.disabled = false;
-      btn.innerHTML = '<i data-lucide="mic" class="w-6 h-6"></i>';
-      const label = btn.parentElement?.querySelector('.record-label');
-      if (label) label.textContent = '버튼을 눌러 녹음 시작';
-      
-      const existingInput = btn.querySelector('input[type="file"]');
-      if (existingInput) existingInput.remove();
-      
-      lucide.createIcons();
-    }
-
-    function stopRecording(type) {
-      if (state.mediaRecorder && state.isRecording) {
-        try { state.mediaRecorder.stop(); } catch (e) { }
-        state.isRecording = false;
-      }
-    }
-
     async function handleRecordingComplete(audioBlob, boxType) {
-      // 파일 업로드 폴백 시 type이 빈 문자열일 수 있으므로 기본값 강제 할당 (MIME 매칭 오류 방지)
-      if (!audioBlob.type) {
-        audioBlob = new Blob([audioBlob], { type: 'audio/mp4' }); 
-      }
-      
-      const blobUrl = createBlobUrl(audioBlob);
-      const msgId = generateId();
-      state.messages.push({ id: msgId, role: 'user', type: 'audio', blobUrl });
+      var blobUrl = createBlobUrl(audioBlob);
+      var msgId = generateId();
+      state.messages.push({ id: msgId, role: 'user', type: 'audio', blobUrl: blobUrl });
       renderChatMessages();
       state.chatStep = 'PROCESSING';
       setTyping(true);
 
       try {
-        let base64Audio = await blobToBase64(audioBlob);
-        const mimeMatch = base64Audio.match(/^data:([^;]+)(?:;[^,]*)?,/);
+        var base64Audio = await blobToBase64(audioBlob);
+        var mimeMatch = base64Audio.match(/^data:([^;]+)(?:;[^,]*)?,/);
         if (mimeMatch && mimeMatch[1]) {
-          const cleanMime = mimeMatch[1];
-          const b64Data = base64Audio.substring(base64Audio.indexOf(',') + 1);
-          base64Audio = `data:${cleanMime};base64,${b64Data}`;
+          var cleanMime = mimeMatch[1];
+          var b64Data = base64Audio.substring(base64Audio.indexOf(',') + 1);
+          base64Audio = 'data:' + cleanMime + ';base64,' + b64Data;
         }
-        const msgIndex = state.messages.findIndex(m => m.id === msgId);
+        var msgIndex = state.messages.findIndex(function (m) { return m.id === msgId; });
         if (msgIndex !== -1) state.messages[msgIndex].base64 = base64Audio;
 
         if (boxType === 'recording_box_1') {
-          const evalPrompt = `첨부된 오디오 파일을 듣고 학생의 영어 발음을 분석해줘.
-학습 대상 단어: "${state.currentWord}", 발음기호: ${state.context.phonetics}
-현재 시도: ${state.recordRetryCount + 1}/3회
-[분석] 1. 발음 정확도 2. 강세 3. 억양
-JSON: {"feedback": "친절한 피드백 1~2문장 ${state.recordRetryCount >= 2 ? '(3번째이므로 격려하며 다음 단계 유도)' : ''} (마크다운/이모지 금지)", "retry": ${state.recordRetryCount >= 2 ? 'false' : 'true/false'}}`;
-          const evalRes = await callGemini(evalPrompt, true, base64Audio);
+          var evalPrompt = '첨부된 오디오 파일을 듣고 학생의 영어 발음을 분석해줘.\n학습 대상 단어: "' + state.currentWord + '", 발음기호: ' + state.context.phonetics + '\n현재 시도: ' + (state.recordRetryCount + 1) + '/3회\n[분석] 1. 발음 정확도 2. 강세 3. 억양\nJSON: {"feedback": "친절한 피드백 1~2문장 ' + (state.recordRetryCount >= 2 ? '(3번째이므로 격려하며 다음 단계 유도)' : '') + ' (마크다운/이모지 금지)", "retry": ' + (state.recordRetryCount >= 2 ? 'false' : 'true/false') + '}';
+          var evalRes = await callGemini(evalPrompt, true, base64Audio);
           addMessage({ role: 'ai', content: evalRes.feedback });
 
           if (!evalRes.retry || state.recordRetryCount >= 2) state.evaluation.pronunciationFeedback = evalRes.feedback;
 
           if (evalRes.retry && state.recordRetryCount < 2) {
             state.recordRetryCount++;
-            setTimeout(() => { addMessage({ role: 'system', type: 'recording_box_1' }); state.chatStep = 'WAIT_RECORD_1'; setTyping(false); }, 1000);
+            setTimeout(function () { addMessage({ role: 'system', type: 'recording_box_1' }); state.chatStep = 'WAIT_RECORD_1'; setTyping(false); }, 1000);
           } else {
             state.recordRetryCount = 0;
-            setTimeout(() => { addMessage({ role: 'system', type: 'tts_box' }); state.chatStep = 'WAIT_TTS'; setTyping(false); }, 1000);
+            setTimeout(function () { addMessage({ role: 'system', type: 'tts_box' }); state.chatStep = 'WAIT_TTS'; setTyping(false); }, 1000);
           }
         } else if (boxType === 'recording_box_2') {
-          const evalPrompt = `첨부된 오디오는 학생이 원어민 발음을 듣고 "${state.currentWord}"를 따라 읽은 파일이야. 가볍게 칭찬하고 격려하는 피드백 1문장 (마크다운/이모지 금지)`;
-          const feedback = await callGemini(evalPrompt, false, base64Audio);
+          var evalPrompt2 = '첨부된 오디오는 학생이 원어민 발음을 듣고 "' + state.currentWord + '"를 따라 읽은 파일이야. 가볍게 칭찬하고 격려하는 피드백 1문장 (마크다운/이모지 금지)';
+          var feedback = await callGemini(evalPrompt2, false, base64Audio);
           addMessage({ role: 'ai', content: feedback });
           if (state.evaluation.pronunciationFeedback) state.evaluation.pronunciationFeedback += '\n\n' + feedback;
           else state.evaluation.pronunciationFeedback = feedback;
-          setTimeout(() => { transitionToMeaning(); }, 1000);
+          setTimeout(function () { transitionToMeaning(); }, 1000);
         }
       } catch (err) {
         console.error('음성 분석 실패:', err);
@@ -756,33 +807,33 @@ JSON: {"feedback": "친절한 피드백 1~2문장 ${state.recordRetryCount >= 2 
     function transitionToRecord2() {
       state.chatStep = 'PROCESSING';
       addMessage({ role: 'ai', content: '방금 들은 원어민 발음처럼 한 번 더 자신 있게 녹음해볼까?' });
-      setTimeout(() => { addMessage({ role: 'system', type: 'recording_box_2' }); state.chatStep = 'WAIT_RECORD_2'; }, 500);
+      setTimeout(function () { addMessage({ role: 'system', type: 'recording_box_2' }); state.chatStep = 'WAIT_RECORD_2'; }, 500);
     }
 
     async function transitionToMeaning() {
       state.chatStep = 'PROCESSING';
       setTyping(true);
-      addMessage({ role: 'ai', content: `영영 뜻을 볼까?: \n"${state.context.engDef}"` });
-      setTimeout(() => { addMessage({ role: 'ai', content: '자, 이 단어의 한글 뜻이 뭘까? 유추해서 적어봐.' }); state.chatStep = 'WAIT_MEANING'; state.inputEnabled = true; setTyping(false); updateInputState(); }, 1500);
+      addMessage({ role: 'ai', content: '영영 뜻을 볼까?: \n"' + state.context.engDef + '"' });
+      setTimeout(function () { addMessage({ role: 'ai', content: '자, 이 단어의 한글 뜻이 뭘까? 유추해서 적어봐.' }); state.chatStep = 'WAIT_MEANING'; state.inputEnabled = true; setTyping(false); updateInputState(); }, 1500);
     }
 
     function updateInputState() {
-      const input = document.getElementById('chat-input');
-      const submitBtn = document.querySelector('#chat-form button[type="submit"]');
+      var input = document.getElementById('chat-input');
+      var submitBtn = document.querySelector('#chat-form button[type="submit"]');
       if (input) {
         input.disabled = !state.inputEnabled;
         input.placeholder = state.inputEnabled ? '답변을 입력하세요...' : '대화 진행 중...';
-        input.className = `w-full pl-3 pr-10 py-2 sm:py-3 rounded-xl border ${state.inputEnabled ? 'bg-gray-50 border-gray-300 focus:border-blue-500' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} outline-none transition-colors text-[15px]`;
+        input.className = 'w-full pl-3 pr-10 py-2 sm:py-3 rounded-xl border ' + (state.inputEnabled ? 'bg-gray-50 border-gray-300 focus:border-blue-500' : 'bg-gray-100 border-gray-200 cursor-not-allowed') + ' outline-none transition-colors text-[15px]';
         if (state.inputEnabled) input.focus();
       }
       if (submitBtn) submitBtn.disabled = !state.inputEnabled;
     }
 
     async function handleUserTextSubmit() {
-      const inputEl = document.getElementById('chat-input');
+      var inputEl = document.getElementById('chat-input');
       if (inputEl) state.inputText = inputEl.value;
       if (!state.inputText.trim()) return;
-      const userText = state.inputText.trim();
+      var userText = state.inputText.trim();
       state.inputText = '';
       state.inputEnabled = false;
       if (inputEl) inputEl.value = '';
@@ -792,10 +843,10 @@ JSON: {"feedback": "친절한 피드백 1~2문장 ${state.recordRetryCount >= 2 
 
       try {
         if (state.chatStep === 'WAIT_MEANING') {
-          const evalPrompt = `단어 "${state.currentWord}"의 뜻을 학생이 "${userText}"라고 대답. 가볍게 평가하고 실제 뜻들을 3~4문장으로 설명해줘. (마크다운/이모지 금지)`;
-          const evalRes = await callGemini(evalPrompt);
+          var evalPrompt = '단어 "' + state.currentWord + '"의 뜻을 학생이 "' + userText + '"라고 대답. 가볍게 평가하고 실제 뜻들을 3~4문장으로 설명해줘. (마크다운/이모지 금지)';
+          var evalRes = await callGemini(evalPrompt);
           addMessage({ role: 'ai', content: evalRes });
-          setTimeout(() => { addMessage({ role: 'ai', content: '문맥 속에서 어떻게 쓰이는지 예문을 보여줄게.' }); addMessage({ role: 'system', type: 'ex1_box' }); state.chatStep = 'WAIT_EX1_BTN'; setTyping(false); }, 1500);
+          setTimeout(function () { addMessage({ role: 'ai', content: '문맥 속에서 어떻게 쓰이는지 예문을 보여줄게.' }); addMessage({ role: 'system', type: 'ex1_box' }); state.chatStep = 'WAIT_EX1_BTN'; setTyping(false); }, 1500);
         } else if (state.chatStep === 'WAIT_EX1_ANS') await handleExampleAnswer(userText, 1);
         else if (state.chatStep === 'WAIT_EX2_ANS') await handleExampleAnswer(userText, 2);
         else if (state.chatStep === 'WAIT_WRITING_ANS') await handleWritingAnswer(userText);
@@ -808,34 +859,34 @@ JSON: {"feedback": "친절한 피드백 1~2문장 ${state.recordRetryCount >= 2 
     }
 
     async function handleExampleAnswer(userText, exNum) {
-      const evalPrompt = `단어 "${state.currentWord}"가 쓰인 예문 "${state.context.tempEx}"에 대해 학생이 "${userText}"라고 번역. 시도: ${state.retryCount + 1}/3회 JSON: {"feedback": "평가 (마크다운 금지)", "retry": ${state.retryCount >= 2 ? 'false' : 'true/false'}}`;
-      const evalRes = await callGemini(evalPrompt, true);
+      var evalPrompt = '단어 "' + state.currentWord + '"가 쓰인 예문 "' + state.context.tempEx + '"에 대해 학생이 "' + userText + '"라고 번역. 시도: ' + (state.retryCount + 1) + '/3회 JSON: {"feedback": "평가 (마크다운 금지)", "retry": ' + (state.retryCount >= 2 ? 'false' : 'true/false') + '}';
+      var evalRes = await callGemini(evalPrompt, true);
       addMessage({ role: 'ai', content: evalRes.feedback });
       if (evalRes.retry && state.retryCount < 2) { state.retryCount++; state.chatStep = exNum === 1 ? 'WAIT_EX1_ANS' : 'WAIT_EX2_ANS'; state.inputEnabled = true; setTyping(false); updateInputState(); }
-      else { state.evaluation.exampleSentences.push({ text: state.context.tempEx, userTranslation: userText, feedback: evalRes.feedback }); state.retryCount = 0; setTimeout(() => { if (exNum === 1) transitionToEx2Btn(); else transitionToWriting(); setTyping(false); }, 1000); }
+      else { state.evaluation.exampleSentences.push({ text: state.context.tempEx, userTranslation: userText, feedback: evalRes.feedback }); state.retryCount = 0; setTimeout(function () { if (exNum === 1) transitionToEx2Btn(); else transitionToWriting(); setTyping(false); }, 1000); }
     }
 
     async function handleWritingAnswer(userText) {
-      const evalPrompt = `한국어 "${state.context.tempEx}"를 학생이 영어로 "${userText}"라고 작문. 핵심단어: ${state.currentWord} 시도: ${state.retryCount + 1}/3회 JSON: {"feedback": "평가 (마크다운 금지)", "retry": ${state.retryCount >= 2 ? 'false' : 'true/false'}}`;
-      const evalRes = await callGemini(evalPrompt, true);
+      var evalPrompt = '한국어 "' + state.context.tempEx + '"를 학생이 영어로 "' + userText + '"라고 작문. 핵심단어: ' + state.currentWord + ' 시도: ' + (state.retryCount + 1) + '/3회 JSON: {"feedback": "평가 (마크다운 금지)", "retry": ' + (state.retryCount >= 2 ? 'false' : 'true/false') + '}';
+      var evalRes = await callGemini(evalPrompt, true);
       addMessage({ role: 'ai', content: evalRes.feedback });
       if (evalRes.retry && state.retryCount < 2) { state.retryCount++; state.chatStep = 'WAIT_WRITING_ANS'; state.inputEnabled = true; setTyping(false); updateInputState(); }
       else {
         state.evaluation.writing = { text: state.context.tempEx, userWriting: userText, feedback: evalRes.feedback };
         state.retryCount = 0;
-        const sumPrompt = `단어 "${state.currentWord}" 단어장 카드 JSON: {"comment": "격려 1~2문장", "pos": "품사", "meanings": ["뜻"], "example": "예문"}`;
-        const sumRes = await callGemini(sumPrompt, true);
-        setTimeout(() => { addMessage({ role: 'ai', content: sumRes.comment }); state.context.finalData = { pos: sumRes.pos, meanings: sumRes.meanings, example: sumRes.example }; addMessage({ role: 'system', type: 'save_box' }); state.chatStep = 'WAIT_SAVE'; setTyping(false); }, 1500);
+        var sumPrompt = '단어 "' + state.currentWord + '" 단어장 카드 JSON: {"comment": "격려 1~2문장", "pos": "품사", "meanings": ["뜻"], "example": "예문"}';
+        var sumRes = await callGemini(sumPrompt, true);
+        setTimeout(function () { addMessage({ role: 'ai', content: sumRes.comment }); state.context.finalData = { pos: sumRes.pos, meanings: sumRes.meanings, example: sumRes.example }; addMessage({ role: 'system', type: 'save_box' }); state.chatStep = 'WAIT_SAVE'; setTyping(false); }, 1500);
       }
     }
 
     async function triggerEx1() {
       state.chatStep = 'PROCESSING'; setTyping(true);
       try {
-        const exPrompt = `단어 "${state.currentWord}"가 쓰인 쉬운 영어 예문 1개 JSON: {"en": "문장"}`;
-        const data = await callGemini(exPrompt, true);
+        var exPrompt = '단어 "' + state.currentWord + '"가 쓰인 쉬운 영어 예문 1개 JSON: {"en": "문장"}';
+        var data = await callGemini(exPrompt, true);
         state.context.tempEx = data.en;
-        addMessage({ role: 'ai', content: `[예문 1]\n"${data.en}"\n\n이 문장을 해석해볼래?` });
+        addMessage({ role: 'ai', content: '[예문 1]\n"' + data.en + '"\n\n이 문장을 해석해볼래?' });
         state.chatStep = 'WAIT_EX1_ANS'; state.inputEnabled = true; setTyping(false); updateInputState();
       } catch (err) { addMessage({ role: 'ai', content: '예문을 가져오는 데 문제가 생겼어.' }); addMessage({ role: 'system', type: 'ex1_box' }); state.chatStep = 'WAIT_EX1_BTN'; setTyping(false); }
     }
@@ -845,10 +896,10 @@ JSON: {"feedback": "친절한 피드백 1~2문장 ${state.recordRetryCount >= 2 
     async function triggerEx2() {
       state.chatStep = 'PROCESSING'; setTyping(true);
       try {
-        const exPrompt = `단어 "${state.currentWord}"가 쓰인 다른 맥락의 쉬운 영어 예문 1개 JSON: {"en": "문장"}`;
-        const data = await callGemini(exPrompt, true);
+        var exPrompt = '단어 "' + state.currentWord + '"가 쓰인 다른 맥락의 쉬운 영어 예문 1개 JSON: {"en": "문장"}';
+        var data = await callGemini(exPrompt, true);
         state.context.tempEx = data.en;
-        addMessage({ role: 'ai', content: `[예문 2]\n"${data.en}"\n\n이 문장도 해석해봐.` });
+        addMessage({ role: 'ai', content: '[예문 2]\n"' + data.en + '"\n\n이 문장도 해석해봐.' });
         state.chatStep = 'WAIT_EX2_ANS'; state.inputEnabled = true; setTyping(false); updateInputState();
       } catch (err) { addMessage({ role: 'ai', content: '예문을 가져오는 데 문제가 생겼어.' }); addMessage({ role: 'system', type: 'ex2_box' }); state.chatStep = 'WAIT_EX2_BTN'; setTyping(false); }
     }
@@ -856,21 +907,21 @@ JSON: {"feedback": "친절한 피드백 1~2문장 ${state.recordRetryCount >= 2 
     async function transitionToWriting() {
       state.chatStep = 'PROCESSING'; setTyping(true);
       try {
-        const writePrompt = `단어 "${state.currentWord}"의 뜻을 활용한 쉬운 한국어 문장 1개 (영어 알파벳 절대 금지). JSON: {"ko": "문장"}`;
-        const data = await callGemini(writePrompt, true);
+        var writePrompt = '단어 "' + state.currentWord + '"의 뜻을 활용한 쉬운 한국어 문장 1개 (영어 알파벳 절대 금지). JSON: {"ko": "문장"}';
+        var data = await callGemini(writePrompt, true);
         state.context.tempEx = data.ko;
-        addMessage({ role: 'ai', content: `마지막으로 영작을 해봐야 진짜 내 것이 되지!\n\n"${data.ko}"\n\n이 문장을 영어로 작문해볼래?` });
+        addMessage({ role: 'ai', content: '마지막으로 영작을 해봐야 진짜 내 것이 되지!\n\n"' + data.ko + '"\n\n이 문장을 영어로 작문해볼래?' });
         state.chatStep = 'WAIT_WRITING_ANS'; state.inputEnabled = true; setTyping(false); updateInputState();
       } catch (err) {
         addMessage({ role: 'ai', content: '문제를 만드는 데 오류가 생겼어.' });
-        try { const sumPrompt = `단어 "${state.currentWord}" 단어장 카드 JSON: {"comment": "격려", "pos": "품사", "meanings": ["뜻"], "example": "예문"}`; const sumRes = await callGemini(sumPrompt, true); state.context.finalData = sumRes; addMessage({ role: 'system', type: 'save_box' }); state.chatStep = 'WAIT_SAVE'; } catch (e) { goHome(); }
+        try { var sumPrompt = '단어 "' + state.currentWord + '" 단어장 카드 JSON: {"comment": "격려", "pos": "품사", "meanings": ["뜻"], "example": "예문"}'; var sumRes = await callGemini(sumPrompt, true); state.context.finalData = sumRes; addMessage({ role: 'system', type: 'save_box' }); state.chatStep = 'WAIT_SAVE'; } catch (e) { goHome(); }
         setTyping(false);
       }
     }
 
     function saveWord() {
-      const wordData = { word: state.currentWord, phonetics: state.context.phonetics, pos: state.context.finalData?.pos || '단어', meanings: state.context.finalData?.meanings || [state.context.engDef], example: state.context.finalData?.example };
-      if (!state.vocabList.find(w => w.word === wordData.word)) { state.vocabList.unshift(wordData); saveVocabList(); showToast('단어장에 저장했어!'); }
+      var wordData = { word: state.currentWord, phonetics: state.context.phonetics, pos: state.context.finalData?.pos || '단어', meanings: state.context.finalData?.meanings || [state.context.engDef], example: state.context.finalData?.example };
+      if (!state.vocabList.find(function (w) { return w.word === wordData.word; })) { state.vocabList.unshift(wordData); saveVocabList(); showToast('단어장에 저장했어!'); }
       else showToast('이미 저장된 단어야!');
       goHome();
     }
@@ -879,53 +930,48 @@ JSON: {"feedback": "친절한 피드백 1~2문장 ${state.recordRetryCount >= 2 
     // 리포트
     // =====================
     function renderReportView(container) {
-      container.innerHTML = `
-        <div class="flex-1 overflow-y-auto bg-gray-100 flex flex-col p-4">
-          <div class="flex items-center justify-between mb-4">
-            <button id="report-back-btn" class="p-2 text-gray-600 bg-white rounded-full shadow-sm hover:bg-gray-50"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
-            <div class="font-bold text-gray-800">학습 리포트</div>
-            <div class="flex gap-2">
-              <button id="report-pdf-btn" class="p-2 text-blue-600 bg-white rounded-full shadow-sm hover:bg-blue-50" title="PDF 다운로드"><i data-lucide="download" class="w-5 h-5"></i></button>
-              <button id="report-save-btn" class="p-2 text-gray-800 bg-white rounded-full shadow-sm hover:bg-gray-50" title="단어 저장"><i data-lucide="bookmark-plus" class="w-5 h-5"></i></button>
-            </div>
-          </div>
-          <div id="pdf-content" class="bg-white rounded-xl shadow-lg p-6 sm:p-8 text-gray-800 w-full max-w-2xl mx-auto">
-            <div class="flex items-center gap-4 mb-6 border-b pb-4"><img src="${CONFIG.KIM_IMAGE_URL}" alt="김수석" class="w-16 h-16 rounded-full border border-gray-200" /><div><h2 class="text-xl font-bold text-gray-900">오늘의 단어: <span class="text-blue-600 text-2xl capitalize">${escapeHtml(state.currentWord)}</span></h2><div class="text-sm text-gray-500 font-mono mt-1">[${escapeHtml(state.context.phonetics || '')}]</div></div></div>
-            <div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="book" class="w-5 h-5 text-blue-600"></i> 뜻과 정의</h3><div class="bg-gray-50 p-4 rounded-lg"><p class="font-bold text-gray-900 mb-1">${escapeHtml(state.context.finalData?.pos || '단어')}</p><ul class="list-disc pl-5 space-y-1 text-gray-700 text-[15px]">${(state.context.finalData?.meanings || [state.context.engDef]).map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul></div></div>
-            <div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="mic" class="w-5 h-5 text-green-600"></i> 발음 평가</h3><div class="bg-green-50/50 p-4 rounded-lg text-[15px] whitespace-pre-wrap text-gray-700 border border-green-100">${escapeHtml(state.evaluation.pronunciationFeedback || '발음 녹음 기록이 없습니다.')}</div></div>
-            <div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="message-circle" class="w-5 h-5 text-orange-500"></i> 예문 해석</h3><div class="space-y-4">${state.evaluation.exampleSentences.length > 0 ? state.evaluation.exampleSentences.map((ex, i) => `<div class="bg-orange-50/30 p-4 rounded-lg border border-orange-100 text-[14px]"><p class="font-bold text-gray-900 mb-2">[예문 ${i + 1}] ${escapeHtml(ex.text)}</p><div class="bg-white p-3 rounded border border-gray-200 mb-2"><span class="text-xs font-bold text-gray-500 block">나의 해석</span><p class="text-gray-800">${escapeHtml(ex.userTranslation)}</p></div><p class="text-sm text-gray-700">${escapeHtml(ex.feedback)}</p></div>`).join('') : '<p class="text-gray-500 text-sm italic">기록 없음</p>'}</div></div>
-            <div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="pen-tool" class="w-5 h-5 text-purple-600"></i> 영작 연습</h3><div class="bg-purple-50/30 p-4 rounded-lg border border-purple-100 text-[14px]">${state.evaluation.writing.text ? `<p class="font-bold text-gray-900 mb-2">${escapeHtml(state.evaluation.writing.text)}</p><div class="bg-white p-3 rounded border border-gray-200 mb-2"><span class="text-xs font-bold text-gray-500 block">나의 영작</span><p class="text-gray-800 font-mono">${escapeHtml(state.evaluation.writing.userWriting)}</p></div><p class="text-sm text-gray-700">${escapeHtml(state.evaluation.writing.feedback)}</p>` : '<p class="text-gray-500 text-sm italic">기록 없음</p>'}</div></div>
-            <div class="text-center text-sm text-gray-400 mt-8 border-t pt-4">Generated by 김수석 영어 사전</div>
-          </div>
-        </div>`;
+      container.innerHTML = '<div class="flex-1 overflow-y-auto bg-gray-100 flex flex-col p-4">' +
+        '<div class="flex items-center justify-between mb-4">' +
+        '<button id="report-back-btn" class="p-2 text-gray-600 bg-white rounded-full shadow-sm hover:bg-gray-50"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>' +
+        '<div class="font-bold text-gray-800">학습 리포트</div>' +
+        '<div class="flex gap-2">' +
+        '<button id="report-pdf-btn" class="p-2 text-blue-600 bg-white rounded-full shadow-sm hover:bg-blue-50" title="PDF 다운로드"><i data-lucide="download" class="w-5 h-5"></i></button>' +
+        '<button id="report-save-btn" class="p-2 text-gray-800 bg-white rounded-full shadow-sm hover:bg-gray-50" title="단어 저장"><i data-lucide="bookmark-plus" class="w-5 h-5"></i></button>' +
+        '</div></div>' +
+        '<div id="pdf-content" class="bg-white rounded-xl shadow-lg p-6 sm:p-8 text-gray-800 w-full max-w-2xl mx-auto">' +
+        '<div class="flex items-center gap-4 mb-6 border-b pb-4"><img src="' + CONFIG.KIM_IMAGE_URL + '" alt="김수석" class="w-16 h-16 rounded-full border border-gray-200" /><div><h2 class="text-xl font-bold text-gray-900">오늘의 단어: <span class="text-blue-600 text-2xl capitalize">' + escapeHtml(state.currentWord) + '</span></h2><div class="text-sm text-gray-500 font-mono mt-1">[' + escapeHtml(state.context.phonetics || '') + ']</div></div></div>' +
+        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="book" class="w-5 h-5 text-blue-600"></i> 뜻과 정의</h3><div class="bg-gray-50 p-4 rounded-lg"><p class="font-bold text-gray-900 mb-1">' + escapeHtml(state.context.finalData?.pos || '단어') + '</p><ul class="list-disc pl-5 space-y-1 text-gray-700 text-[15px]">' + (state.context.finalData?.meanings || [state.context.engDef]).map(function (m) { return '<li>' + escapeHtml(m) + '</li>'; }).join('') + '</ul></div></div>' +
+        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="mic" class="w-5 h-5 text-green-600"></i> 발음 평가</h3><div class="bg-green-50/50 p-4 rounded-lg text-[15px] whitespace-pre-wrap text-gray-700 border border-green-100">' + escapeHtml(state.evaluation.pronunciationFeedback || '발음 녹음 기록이 없습니다.') + '</div></div>' +
+        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="message-circle" class="w-5 h-5 text-orange-500"></i> 예문 해석</h3><div class="space-y-4">' + (state.evaluation.exampleSentences.length > 0 ? state.evaluation.exampleSentences.map(function (ex, i) { return '<div class="bg-orange-50/30 p-4 rounded-lg border border-orange-100 text-[14px]"><p class="font-bold text-gray-900 mb-2">[예문 ' + (i + 1) + '] ' + escapeHtml(ex.text) + '</p><div class="bg-white p-3 rounded border border-gray-200 mb-2"><span class="text-xs font-bold text-gray-500 block">나의 해석</span><p class="text-gray-800">' + escapeHtml(ex.userTranslation) + '</p></div><p class="text-sm text-gray-700">' + escapeHtml(ex.feedback) + '</p></div>'; }).join('') : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
+        '<div class="mb-6"><h3 class="text-lg font-bold flex items-center gap-2 mb-2"><i data-lucide="pen-tool" class="w-5 h-5 text-purple-600"></i> 영작 연습</h3><div class="bg-purple-50/30 p-4 rounded-lg border border-purple-100 text-[14px]">' + (state.evaluation.writing.text ? '<p class="font-bold text-gray-900 mb-2">' + escapeHtml(state.evaluation.writing.text) + '</p><div class="bg-white p-3 rounded border border-gray-200 mb-2"><span class="text-xs font-bold text-gray-500 block">나의 영작</span><p class="text-gray-800 font-mono">' + escapeHtml(state.evaluation.writing.userWriting) + '</p></div><p class="text-sm text-gray-700">' + escapeHtml(state.evaluation.writing.feedback) + '</p>' : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
+        '<div class="text-center text-sm text-gray-400 mt-8 border-t pt-4">Generated by 김수석 영어 사전</div>' +
+        '</div></div>';
       lucide.createIcons();
-      document.getElementById('report-back-btn').onclick = () => { state.view = 'chat'; render(); scrollToBottom(); };
-      document.getElementById('report-save-btn').onclick = () => { saveWord(); };
-      document.getElementById('report-pdf-btn').onclick = downloadPdf;
+      document.getElementById('report-back-btn').addEventListener('click', function () { state.view = 'chat'; render(); scrollToBottom(); });
+      document.getElementById('report-save-btn').addEventListener('click', function () { saveWord(); });
+      document.getElementById('report-pdf-btn').addEventListener('click', downloadPdf);
     }
 
     function downloadPdf() {
-      const element = document.getElementById('pdf-content');
+      var element = document.getElementById('pdf-content');
       if (!element) return;
       showToast('PDF 생성 중...');
       if (typeof html2pdf === 'undefined') { showToast('PDF 라이브러리 로드 실패'); return; }
-      html2pdf().set({ margin: 10, filename: `학습리포트_${state.currentWord}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(element).save().then(() => showToast('PDF 다운로드 완료!')).catch(err => { console.error('PDF 생성 오류:', err); showToast('PDF 생성 실패'); });
+      html2pdf().set({ margin: 10, filename: '학습리포트_' + state.currentWord + '.pdf', image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(element).save().then(function () { showToast('PDF 다운로드 완료!'); }).catch(function (err) { console.error('PDF 생성 오류:', err); showToast('PDF 생성 실패'); });
     }
 
     // =====================
     // 초기화
     // =====================
-    window.addEventListener('DOMContentLoaded', () => {
-      const support = checkBrowserSupport();
-      if (!support.localStorage) showToast('단어장 저장이 지원되지 않습니다.');
-      if (!support.secureContext) console.warn('비보안 컨텍스트 - 녹음 기능 제한됨');
-      if (support.speechSynthesis) loadTTSVoices();
+    window.addEventListener('DOMContentLoaded', function () {
+      if (!window.isSecureContext) console.warn('⚠️ 비보안 컨텍스트 - 녹음 기능 제한됨');
+      if (window.speechSynthesis) loadTTSVoices();
       render();
     });
 
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('beforeunload', function () {
       revokeAllBlobUrls();
-      if (state.currentStream) state.currentStream.getTracks().forEach(track => track.stop());
+      if (state.currentStream) state.currentStream.getTracks().forEach(function (track) { track.stop(); });
     });
   </script>
 </body>
