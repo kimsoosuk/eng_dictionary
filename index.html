@@ -1094,20 +1094,29 @@
       } catch (err) {
         console.error('녹음 시작 실패:', err);
 
-        let message = `마이크 접근 실패 (${err.name}: ${err.message || ''})`;
-        let useToast = true;
+        // --- 상세 디버깅 정보 수집 ---
+        const debugInfo = [
+          `Error: ${err.name} - ${err.message || 'No msg'}`,
+          `isSecureContext: ${window.isSecureContext}`,
+          `Protocol: ${location.protocol}`,
+          `UserAgent: ${navigator.userAgent}`
+        ].join('\\n');
 
-        if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
-          message = '⚠️ 마이크 권한이 거부되었습니다.\n\n안드로이드나 아이폰의 [설정] 앱에서 해당 브라우저(Safari/Chrome)의 마이크 권한이 허용되어 있는지 확인해주세요.';
-          useToast = false;
+        let message = `마이크 접근 실패\\n\\n[디버그 정보]\\n${debugInfo}`;
+        let useToast = false; // 모바일 확인용으로 일단 무조건 alert()를 띄우게 함
+
+        if (!window.isSecureContext) {
+          message = `⚠️ 보안 문제로 마이크가 차단되었습니다.\\n현재 URL이 http:// 이거나 로컬 IP입니다. 마이크는 반드시 https:// 에서만 동작합니다.\\n\\n${debugInfo}`;
+        } else if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+          message = `⚠️ 마이크 권한이 거부되었습니다.\\n\\n안드로이드나 아이폰의 [설정] 앱에서 해당 브라우저(Safari/Chrome)의 마이크 권한이 허용되어 있는지 확인해주세요.\\n\\n[디버그 정보 보여주세요]\\n${debugInfo}`;
         } else if (err.name === 'NotFoundError') {
-          message = '마이크 모듈을 찾을 수 없습니다. 기기를 확인해주세요.';
+          message = `마이크 모듈을 찾을 수 없습니다. 기기를 확인해주세요.\\n\\n${debugInfo}`;
         } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-          message = '마이크가 이미 른 앱에서 사용 중이거나 접근할 수 없습니다.';
+          message = `마이크가 이미 다른 앱에서 사용 중이거나 접근할 수 없습니다.\\n\\n${debugInfo}`;
         }
 
         if (useToast) {
-          showToast(message, 5000);
+          showToast(message, 7000);
         } else {
           alert(message);
         }
