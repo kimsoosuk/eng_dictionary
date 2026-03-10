@@ -823,15 +823,45 @@
       // 녹음 버튼
       document.querySelectorAll('[data-action="record"]').forEach(btn => {
         btn.addEventListener('click', (e) => {
-          // 모바일 사용자 제스처 보호를 위해 preventDefault 및 async/await 생략
           const type = btn.dataset.type;
           const id = btn.dataset.id;
 
           if (state.isRecording) {
             stopRecording(type);
-          } else {
-            startRecording(btn, type, id);
+            return;
           }
+
+          // === [iOS 호환성 핵심] 비동기(async) 호출 전면 제거 ===
+          // 버튼 클릭이라는 '사용자 제스처 컨텍스트(User Gesture Context)'를 iOS 브라우저가
+          // 인지하는 순간(동기적 실행 흐름 내) 즉시 getUserMedia를 호출해야만 권한을 묻습니다. 
+
+          if (window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+          }
+
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showToast('이 브라우저에서는 녹음을 지원하지 않습니다.');
+            return;
+          }
+
+          if (typeof MediaRecorder === 'undefined') {
+            showToast('이 브라우저에서는 녹음 기능을 지원하지 않습니다.');
+            return;
+          }
+
+          if (state.currentStream) {
+            state.currentStream.getTracks().forEach(track => track.stop());
+            state.currentStream = null;
+          }
+
+          // await 키워드 없이 즉시 Promise 호출 후 then() 체이닝으로 처리
+          navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(stream => {
+              handleStreamSuccess(stream, btn, type);
+            })
+            .catch(err => {
+              handleStreamError(err);
+            });
         });
       });
 
@@ -1020,119 +1050,85 @@
     // =====================
     // 녹음 기능 (iOS 호환성 개선)
     // =====================
-    async function startRecording(btn, type, id) {
-      try {
-        // [핵심] 모바일 기기 하드웨어 독점 방지:
-        // TTS(발음듣기) 엔진이 백그라운드에 살아있으면 마이크 권한 팝업창도 안 띄우고 즉시 NotAllowedError를 뱉는 버그 해결
-        if (window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-        }
+    function handleStreamSuccess(stream, btn, type) {
+      state.currentStream = stream;
 
-        // 가장 기본적이고 필수적인 지원 확인
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          showToast('이 브라우저에서는 녹음을 지원하지 않습니다.');
-          return;
-        }
-        if (typeof MediaRecorder === 'undefined') {
-          showToast('이 브라우저에서는 녹음 기능을 지원하지 않습니다.');
-          return;
-        }
+      // MIME 타입 선택 (iOS 호환성 및 기본 브라우저 설정)
+      const mimeType = getRecordingMimeType();
+      const options = mimeType ? { mimeType } : {};
 
-        // 기존 마이크 연결이 남아있으면 모바일은 새 권한 요청을 즉시 튕겨냅니다 (하드웨어 Lock).
-        // 기존 스트림을 확실히 끊어줍니다.
+      state.mediaRecorder = new MediaRecorder(stream, options);
+      state.audioChunks = [];
+
+      state.mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          state.audioChunks.push(e.data);
+        }
+      };
+
+      state.mediaRecorder.onstop = () => {
+        const actualMimeType = state.mediaRecorder.mimeType || mimeType || 'audio/webm';
+        const audioBlob = new Blob(state.audioChunks, { type: actualMimeType });
+
+        // 사용이 끝난 하드웨어 자원을 즉각 운영체제로 반납
         if (state.currentStream) {
           state.currentStream.getTracks().forEach(track => track.stop());
           state.currentStream = null;
         }
 
-        // --- 핵심 원인 수정 ---
-        // iOS Safari 18에서는 사용자 클릭 직후(User Gesture) "동기적"으로 getUserMedia가 호출되지 않고
-        // 중간에 await setTimeout 등으로 딜레이가 생기면, "사용자가 직접 누른 것"으로 인정하지 않고 
-        // 권한 팝업 없이 즉각 NotAllowedError를 던집니다. (보안 정책 강화)
-        // 따라서 딜레이 코드를 삭제하고 곧바로 마이크를 요청합니다.
+        handleRecordingComplete(audioBlob, type);
+      };
 
-        // 모바일에서의 NotAllowedError/SecurityError 등 우회:
-        // 제약조건(constraints)에 아무것도 넣지 않은 순수한 { audio: true }
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.mediaRecorder.onerror = (e) => {
+        console.error('MediaRecorder 에러:', e);
+        showToast('녹음 중 오류가 발생했습니다.');
+        state.isRecording = false;
+      };
 
-        state.currentStream = stream;
+      // timeslice(200) 같은 인자는 iOS Safari에서 레코딩이 통째로 망가지는 원인이 되므로 제외.
+      // stop()이 호출되었을 때만 안정적으로 data가 조합되게 함
+      state.mediaRecorder.start();
+      state.isRecording = true;
 
-        // MIME 타입 선택 (iOS 호환성 및 기본 브라우저 설정)
-        const mimeType = getRecordingMimeType();
-        const options = mimeType ? { mimeType } : {};
+      // UI 업데이트
+      btn.classList.remove('bg-gray-800', 'hover:bg-gray-700');
+      btn.classList.add('bg-red-500', 'animate-pulse');
+      btn.innerHTML = '<i data-lucide="mic-off" class="w-6 h-6"></i>';
 
-        state.mediaRecorder = new MediaRecorder(stream, options);
-        state.audioChunks = [];
+      const label = btn.parentElement.querySelector('.record-label');
+      if (label) label.textContent = '녹음 중... 다시 눌러 완료';
 
-        state.mediaRecorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) {
-            state.audioChunks.push(e.data);
-          }
-        };
+      lucide.createIcons();
+    }
 
-        state.mediaRecorder.onstop = () => {
-          const actualMimeType = state.mediaRecorder.mimeType || mimeType || 'audio/webm';
-          const audioBlob = new Blob(state.audioChunks, { type: actualMimeType });
+    function handleStreamError(err) {
+      console.error('녹음 시작 실패:', err);
 
-          // 사용이 끝난 하드웨어 자원을 즉각 운영체제로 반납
-          if (state.currentStream) {
-            state.currentStream.getTracks().forEach(track => track.stop());
-            state.currentStream = null;
-          }
+      // --- 상세 디버깅 정보 수집 ---
+      const debugInfo = [
+        `Error: ${err.name} - ${err.message || 'No msg'}`,
+        `isSecureContext: ${window.isSecureContext}`,
+        `Protocol: ${location.protocol}`,
+        `UserAgent: ${navigator.userAgent.substring(0, 100)}`
+      ].join('\\n');
 
-          handleRecordingComplete(audioBlob, type);
-        };
+      let message = `마이크 접근 실패\\n\\n[디버그 정보]\\n${debugInfo}`;
+      let useToast = false;
 
-        state.mediaRecorder.onerror = (e) => {
-          console.error('MediaRecorder 에러:', e);
-          showToast('녹음 중 오류가 발생했습니다.');
-          state.isRecording = false;
-        };
+      if (!window.isSecureContext) {
+        message = `⚠️ 보안 문제로 마이크가 차단되었습니다.\\n현재 URL이 http:// 이거나 로컬 IP입니다. 마이크는 반드시 https:// 에서만 동작합니다.\\n\\n${debugInfo}`;
+      } else if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+        message = `⚠️ 마이크 권한이 거부되었습니다.\\n\\n안드로이드나 아이폰의 [설정] 앱에서 해당 브라우저(Safari/Chrome)의 마이크 권한이 허용되어 있는지 확인해주세요.\\n\\n[디버그 정보 보여주세요]\\n${debugInfo}`;
+      } else if (err.name === 'NotFoundError') {
+        message = `마이크 모듈을 찾을 수 없습니다. 기기를 확인해주세요.\\n\\n${debugInfo}`;
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        message = `마이크가 이미 다른 앱에서 사용 중이거나 접근할 수 없습니다.\\n\\n${debugInfo}`;
+      }
 
-        // timeslice(200) 같은 인자는 iOS Safari에서 레코딩이 통째로 망가지는 원인이 되므로 제외.
-        // stop()이 호출되었을 때만 안정적으로 data가 조합되게 함
-        state.mediaRecorder.start();
-        state.isRecording = true;
-
-        // UI 업데이트
-        btn.classList.remove('bg-gray-800', 'hover:bg-gray-700');
-        btn.classList.add('bg-red-500', 'animate-pulse');
-        btn.innerHTML = '<i data-lucide="mic-off" class="w-6 h-6"></i>';
-
-        const label = btn.parentElement.querySelector('.record-label');
-        if (label) label.textContent = '녹음 중... 다시 눌러 완료';
-
-        lucide.createIcons();
-
-      } catch (err) {
-        console.error('녹음 시작 실패:', err);
-
-        // --- 상세 디버깅 정보 수집 ---
-        const debugInfo = [
-          `Error: ${err.name} - ${err.message || 'No msg'}`,
-          `isSecureContext: ${window.isSecureContext}`,
-          `Protocol: ${location.protocol}`,
-          `UserAgent: ${navigator.userAgent.substring(0, 100)}`
-        ].join('\n');
-
-        let message = `마이크 접근 실패\n\n[디버그 정보]\n${debugInfo}`;
-        let useToast = false; // 모바일 확인용으로 일단 무조건 alert()를 띄우게 함
-
-        if (!window.isSecureContext) {
-          message = `⚠️ 보안 문제로 마이크가 차단되었습니다.\n현재 URL이 http:// 이거나 로컬 IP입니다. 마이크는 반드시 https:// 에서만 동작합니다.\n\n${debugInfo}`;
-        } else if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
-          message = `⚠️ 마이크 권한이 거부되었습니다.\n\n안드로이드나 아이폰의 [설정] 앱에서 해당 브라우저(Safari/Chrome)의 마이크 권한이 허용되어 있는지 확인해주세요.\n\n[디버그 정보 보여주세요]\n${debugInfo}`;
-        } else if (err.name === 'NotFoundError') {
-          message = `마이크 모듈을 찾을 수 없습니다. 기기를 확인해주세요.\n\n${debugInfo}`;
-        } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-          message = `마이크가 이미 다른 앱에서 사용 중이거나 접근할 수 없습니다.\n\n${debugInfo}`;
-        }
-
-        if (useToast) {
-          showToast(message, 7000);
-        } else {
-          alert(message);
-        }
+      if (useToast) {
+        showToast(message, 7000);
+      } else {
+        alert(message);
       }
     }
 
