@@ -296,14 +296,43 @@
     async function playTTS(word) {
       if (!window.speechSynthesis) { showToast('발음 재생 미지원'); return; }
       window.speechSynthesis.cancel();
+
       const utterance = new SpeechSynthesisUtterance(word);
       utterance.lang = 'en-US';
       utterance.rate = 0.9;
+      utterance.pitch = 1.0;
+
+      // 버그 방지를 위해 참조 유지
+      window.currentUtterance = utterance;
+
       const voices = await loadTTSVoices();
-      const enVoices = voices.filter(v => v.lang.startsWith('en-US') || v.lang.startsWith('en_US'));
-      const premiumVoice = enVoices.find(v => v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Daniel'));
-      if (premiumVoice) utterance.voice = premiumVoice;
-      else if (enVoices.length > 0) utterance.voice = enVoices[0];
+
+      // 1순위: 완벽한 미국 영어(en-US) 음성이며, 고품질 원어민 음성 (영국 발음인 Daniel 등 제외)
+      const premiumUSVoice = voices.find(v =>
+        (v.lang === 'en-US' || v.lang === 'en_US') &&
+        (v.name.includes('Google US English') ||
+          v.name.includes('Samantha') ||
+          v.name.includes('Alex') ||
+          v.name.includes('Fred') ||
+          v.name.includes('Siri') ||
+          v.name.includes('Karen') ||
+          v.name.includes('Zira') ||
+          v.name.includes('David'))
+      );
+
+      // 2순위: 일반 미국 영어
+      const normalUSVoice = voices.find(v => v.lang === 'en-US' || v.lang === 'en_US');
+      // 3순위: 기타 영어
+      const anyEnVoice = voices.find(v => v.lang.startsWith('en'));
+
+      if (premiumUSVoice) {
+        utterance.voice = premiumUSVoice;
+      } else if (normalUSVoice) {
+        utterance.voice = normalUSVoice;
+      } else if (anyEnVoice) {
+        utterance.voice = anyEnVoice;
+      }
+
       window.speechSynthesis.speak(utterance);
     }
 
