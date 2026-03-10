@@ -1022,6 +1022,12 @@
     // =====================
     async function startRecording(btn, type, id) {
       try {
+        // [핵심] 모바일 기기 하드웨어 독점 방지:
+        // TTS(발음듣기) 엔진이 백그라운드에 살아있으면 마이크 권한 팝업창도 안 띄우고 즉시 NotAllowedError를 뱉는 버그 해결
+        if (window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+        }
+
         // 가장 기본적이고 필수적인 지원 확인
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           showToast('이 브라우저에서는 녹음을 지원하지 않습니다.');
@@ -1032,16 +1038,20 @@
           return;
         }
 
-        // 모바일에서의 NotAllowedError/SecurityError 등 권한 거부 우회:
-        // 제약조건(constraints)을 복잡하게 주면 iOS 기기가 권한이 있음에도 거절할 수 있으므로
-        // echoCancellation 등 부가적 옵션 없이 완전히 순수한 { audio: true }만 요청.
-        // 또한 이전 스트림을 먼저 닫는 것이 새로운 스트림을 받아오는데 방해될 수 있으므로 일단 새로 받아옴.
+        // 기존 마이크 연결이 남아있으면 모바일은 새 권한 요청을 즉시 튕겨냅니다 (하드웨어 Lock).
+        // 기존 스트림을 확실히 끊어줍니다.
+        if (state.currentStream) {
+          state.currentStream.getTracks().forEach(track => track.stop());
+          state.currentStream = null;
+        }
+
+        // 하드웨어가 마이크 자원을 반환할 수 있게 아주 짧은 텀(50ms)을 둔 뒤 MediaDevices를 호출합니다
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // 모바일에서의 NotAllowedError/SecurityError 등 우회:
+        // 제약조건(constraints)에 아무것도 넣지 않은 순수한 { audio: true }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        // 새 스트림 확보에 성공하면 이전 스트림을 안전하게 정리함
-        if (state.currentStream && state.currentStream !== stream) {
-          state.currentStream.getTracks().forEach(track => track.stop());
-        }
         state.currentStream = stream;
 
         // MIME 타입 선택 (iOS 호환성 및 기본 브라우저 설정)
@@ -1099,20 +1109,20 @@
           `Error: ${err.name} - ${err.message || 'No msg'}`,
           `isSecureContext: ${window.isSecureContext}`,
           `Protocol: ${location.protocol}`,
-          `UserAgent: ${navigator.userAgent}`
-        ].join('\\n');
+          `UserAgent: ${navigator.userAgent.substring(0, 100)}`
+        ].join('\n');
 
-        let message = `마이크 접근 실패\\n\\n[디버그 정보]\\n${debugInfo}`;
+        let message = `마이크 접근 실패\n\n[디버그 정보]\n${debugInfo}`;
         let useToast = false; // 모바일 확인용으로 일단 무조건 alert()를 띄우게 함
 
         if (!window.isSecureContext) {
-          message = `⚠️ 보안 문제로 마이크가 차단되었습니다.\\n현재 URL이 http:// 이거나 로컬 IP입니다. 마이크는 반드시 https:// 에서만 동작합니다.\\n\\n${debugInfo}`;
+          message = `⚠️ 보안 문제로 마이크가 차단되었습니다.\n현재 URL이 http:// 이거나 로컬 IP입니다. 마이크는 반드시 https:// 에서만 동작합니다.\n\n${debugInfo}`;
         } else if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
-          message = `⚠️ 마이크 권한이 거부되었습니다.\\n\\n안드로이드나 아이폰의 [설정] 앱에서 해당 브라우저(Safari/Chrome)의 마이크 권한이 허용되어 있는지 확인해주세요.\\n\\n[디버그 정보 보여주세요]\\n${debugInfo}`;
+          message = `⚠️ 마이크 권한이 거부되었습니다.\n\n안드로이드나 아이폰의 [설정] 앱에서 해당 브라우저(Safari/Chrome)의 마이크 권한이 허용되어 있는지 확인해주세요.\n\n[디버그 정보 보여주세요]\n${debugInfo}`;
         } else if (err.name === 'NotFoundError') {
-          message = `마이크 모듈을 찾을 수 없습니다. 기기를 확인해주세요.\\n\\n${debugInfo}`;
+          message = `마이크 모듈을 찾을 수 없습니다. 기기를 확인해주세요.\n\n${debugInfo}`;
         } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-          message = `마이크가 이미 다른 앱에서 사용 중이거나 접근할 수 없습니다.\\n\\n${debugInfo}`;
+          message = `마이크가 이미 다른 앱에서 사용 중이거나 접근할 수 없습니다.\n\n${debugInfo}`;
         }
 
         if (useToast) {
