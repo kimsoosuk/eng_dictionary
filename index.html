@@ -482,8 +482,9 @@
         return;
       }
 
-      // 리포트 버튼
+      // 리포트 버튼 (단어장 저장 후 리포트 이동)
       if (e.target.closest('[data-action="view-report"]')) {
+        saveWordNativeUrlNotGoHome();
         state.view = 'report';
         render();
         return;
@@ -707,7 +708,7 @@
       }
       if (type === 'ex1_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex1" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 1 보기</button><button type="button" data-action="skip" data-skip-type="EX1_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
       if (type === 'ex2_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 shadow-sm relative"><button type="button" data-action="ex2" class="w-full py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm hover:bg-blue-700 transition-colors mb-4 text-sm">예문 2 보기</button><button type="button" data-action="skip" data-skip-type="EX2_BTN" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">skip <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
-      if (type === 'save_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border-2 border-gray-800 rounded-xl flex flex-col items-center gap-2 shadow-md relative"><button type="button" data-action="view-report" class="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 mb-2 text-sm shadow-sm"><i data-lucide="file-text" class="w-4 h-4"></i> 나의 단어장 보기</button><button type="button" data-action="save" class="w-full py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 mb-4 text-sm"><i data-lucide="bookmark-plus" class="w-4 h-4"></i> 바로 단어 저장</button><button type="button" data-action="skip" data-skip-type="SAVE" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">종료 <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
+      if (type === 'save_box') return '<div id="system-' + id + '" class="my-2 p-4 bg-white border-2 border-gray-800 rounded-xl flex flex-col items-center gap-2 shadow-md relative"><button type="button" data-action="view-report" class="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 mb-4 text-sm shadow-sm"><i data-lucide="file-text" class="w-4 h-4"></i> 나의 단어장 보기</button><button type="button" data-action="skip" data-skip-type="SAVE" class="absolute bottom-2 right-3 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">종료 <i data-lucide="skip-forward" class="w-3 h-3"></i></button></div>';
       if (type === 'retry_box') return '<div id="system-' + id + '" class="my-2 p-3 bg-white border border-gray-200 rounded-xl flex justify-center gap-3 shadow-sm"><button type="button" data-action="retry-lesson" class="px-5 py-2 bg-gray-800 text-white rounded-lg font-bold text-sm hover:bg-gray-700 transition-colors flex items-center gap-2"><i data-lucide="refresh-cw" class="w-4 h-4"></i> 다시 시도</button><button type="button" data-action="go-home-btn2" class="px-5 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">홈으로</button></div>';
       return '';
     }
@@ -817,14 +818,15 @@
         if (boxType === 'recording_box_1') {
           var evalPrompt = '첨부된 오디오 파일을 듣고 학생의 영어 발음을 분석해줘.\n학습 대상 단어: "' + state.currentWord + '", 발음기호: ' + state.context.phonetics + '\n현재 시도: ' + (state.recordRetryCount + 1) + '/3회\n[평가 기준] 완전히 엉뚱한 단어거나 아예 발음을 안 한 경우에 retry를 true로 주고, 완벽하진 않아도 발음이 분석 기준에 따라 통과된 수준이라면 통과(retry: false)시켜줘.\n[분석] 1. 발음 정확도 2. 강세 3. 억양\nJSON: {"feedback": "친절하고 부드러운 피드백 1~2문장 ' + (state.recordRetryCount >= 2 ? '(3번째이므로 무조건 칭찬하며 다음 단계 유도)' : '') + ' (마크다운/이모지 금지)", "retry": ' + (state.recordRetryCount >= 2 ? 'false' : 'true/false') + '}';
           var evalRes = await callGemini(evalPrompt, true, base64Audio);
-          addMessage({ role: 'ai', content: evalRes.feedback });
-
-          if (!evalRes.retry || state.recordRetryCount >= 2) state.evaluation.pronunciationFeedback = evalRes.feedback;
 
           if (evalRes.retry && state.recordRetryCount < 2) {
+            evalRes.feedback += ' 다시 한 번 버튼을 눌러 녹음해 볼래?';
+            addMessage({ role: 'ai', content: evalRes.feedback });
             state.recordRetryCount++;
             setTimeout(function () { addMessage({ role: 'system', type: 'recording_box_1' }); state.chatStep = 'WAIT_RECORD_1'; setTyping(false); }, 1000);
           } else {
+            addMessage({ role: 'ai', content: evalRes.feedback });
+            state.evaluation.pronunciationFeedback = evalRes.feedback;
             state.recordRetryCount = 0;
             setTimeout(function () { addMessage({ role: 'system', type: 'tts_box' }); state.chatStep = 'WAIT_TTS'; setTyping(false); }, 1000);
           }
@@ -929,6 +931,7 @@
         var exPrompt = '단어 "' + state.currentWord + '"가 쓰인 쉬운 영어 예문 1개 JSON: {"en": "문장"}';
         var data = await callGemini(exPrompt, true);
         state.context.tempEx = data.en;
+        state.context.ex1 = data.en; // 중복 방지 저장
         addMessage({ role: 'ai', content: '[예문 1]\n"' + data.en + '"\n\n이 문장을 해석해볼래?' });
         state.chatStep = 'WAIT_EX1_ANS'; state.inputEnabled = true; setTyping(false); updateInputState();
       } catch (err) { addMessage({ role: 'ai', content: '예문을 가져오는 데 문제가 생겼어.' }); addMessage({ role: 'system', type: 'ex1_box' }); state.chatStep = 'WAIT_EX1_BTN'; setTyping(false); }
@@ -939,9 +942,11 @@
     async function triggerEx2() {
       state.chatStep = 'PROCESSING'; setTyping(true);
       try {
-        var exPrompt = '단어 "' + state.currentWord + '"가 쓰인 다른 맥락의 쉬운 영어 예문 1개 JSON: {"en": "문장"}';
+        var avoidEx = state.context.ex1 ? ' 앞선 예문("' + state.context.ex1 + '")과 완전히 다르고 내용이 겹치지 않는' : '';
+        var exPrompt = '단어 "' + state.currentWord + '"가 쓰인' + avoidEx + ' 조금 더 길지만 쉬운 실생활 영어 예문 1개 추출 JSON: {"en": "문장"}';
         var data = await callGemini(exPrompt, true);
         state.context.tempEx = data.en;
+        state.context.ex2 = data.en; // 중복 방지 쌍 저장
         addMessage({ role: 'ai', content: '[예문 2]\n"' + data.en + '"\n\n이 문장도 해석해봐.' });
         state.chatStep = 'WAIT_EX2_ANS'; state.inputEnabled = true; setTyping(false); updateInputState();
       } catch (err) { addMessage({ role: 'ai', content: '예문을 가져오는 데 문제가 생겼어.' }); addMessage({ role: 'system', type: 'ex2_box' }); state.chatStep = 'WAIT_EX2_BTN'; setTyping(false); }
@@ -950,7 +955,8 @@
     async function transitionToWriting() {
       state.chatStep = 'PROCESSING'; setTyping(true);
       try {
-        var writePrompt = '단어 "' + state.currentWord + '"의 뜻을 활용한 쉬운 한국어 문장 1개 (영어 알파벳 절대 금지). JSON: {"ko": "문장"}';
+        var avoidEx = '앞선 예문들(' + (state.context.ex1 || '') + ', ' + (state.context.ex2 || '') + ')과 절대 겹치지 않는 새로운 상황의';
+        var writePrompt = '단어 "' + state.currentWord + '"의 뜻을 활용해서, 중학생 수준에서 영작할 수 있는 ' + avoidEx + ' 쉬운 한국어 문장 1개를 만들어줘 (영어 알파벳 절대 금지). JSON: {"ko": "문장"}';
         var data = await callGemini(writePrompt, true);
         state.context.tempEx = data.ko;
         addMessage({ role: 'ai', content: '마지막으로 영작을 해봐야 진짜 내 것이 되지!\n\n"' + data.ko + '"\n\n이 문장을 영어로 작문해볼래?' });
@@ -962,10 +968,14 @@
       }
     }
 
-    function saveWord() {
+    // 리포트화면 진입 시에 사용하는 뒤로가기 방지용 저장 함수
+    function saveWordNativeUrlNotGoHome() {
       var wordData = { word: state.currentWord, phonetics: state.context.phonetics, pos: state.context.finalData?.pos || '단어', meanings: state.context.finalData?.meanings || [state.context.engDef], example: state.context.finalData?.example };
-      if (!state.vocabList.find(function (w) { return w.word === wordData.word; })) { state.vocabList.unshift(wordData); saveVocabList(); showToast('단어장에 저장했어!'); }
-      else showToast('이미 저장된 단어야!');
+      if (!state.vocabList.find(function (w) { return w.word === wordData.word; })) { state.vocabList.unshift(wordData); saveVocabList(); showToast('단어장에 자동 저장되었습니다.'); }
+    }
+
+    function saveWord() {
+      saveWordNativeUrlNotGoHome();
       state.showHeader = true;
       state.lastScrollY = 0;
       goHome();
@@ -981,7 +991,6 @@
         '<div class="font-bold text-gray-800">나의 단어장</div>' +
         '<div class="flex gap-2">' +
         '<button id="report-pdf-btn" class="p-2 text-blue-600 bg-white rounded-full shadow-sm hover:bg-blue-50" title="PDF 다운로드"><i data-lucide="download" class="w-5 h-5"></i></button>' +
-        '<button id="report-save-btn" class="p-2 text-gray-800 bg-white rounded-full shadow-sm hover:bg-gray-50" title="단어 저장"><i data-lucide="bookmark-plus" class="w-5 h-5"></i></button>' +
         '</div></div>' +
         '<div id="pdf-content" class="bg-white rounded-xl shadow-lg p-5 sm:p-6 text-gray-800 w-full max-w-2xl mx-auto">' +
         '<div class="flex items-center gap-4 mb-4 border-b pb-3"><img src="' + CONFIG.KIM_IMAGE_URL + '" alt="김수석" class="w-14 h-14 rounded-full border border-gray-200" /><div><h2 class="text-xl font-bold text-gray-900">오늘의 단어: <span class="text-blue-600 text-2xl capitalize">' + escapeHtml(state.currentWord) + '</span></h2><div class="text-sm text-gray-500 font-mono mt-1">[' + escapeHtml(state.context.phonetics || '') + ']</div></div></div>' +
@@ -989,7 +998,7 @@
         '<div class="mb-4"><h3 class="text-base font-bold flex items-center gap-2 mb-2"><i data-lucide="mic" class="w-4 h-4 text-green-600"></i> 발음 평가</h3><div class="bg-green-50/50 p-3 rounded-lg text-[14px] whitespace-pre-wrap text-gray-700 border border-green-100">' + escapeHtml(state.evaluation.pronunciationFeedback || '발음 녹음 기록이 없습니다.') + '</div></div>' +
         '<div class="mb-4"><h3 class="text-base font-bold flex items-center gap-2 mb-2"><i data-lucide="message-circle" class="w-4 h-4 text-orange-500"></i> 예문 해석</h3><div class="space-y-3">' + (state.evaluation.exampleSentences.length > 0 ? state.evaluation.exampleSentences.map(function (ex, i) { return '<div class="bg-orange-50/30 p-3 rounded-lg border border-orange-100 text-[13px]"><p class="font-bold text-gray-900 mb-1">[예문 ' + (i + 1) + '] ' + escapeHtml(ex.text) + '</p><div class="bg-white p-2 rounded border border-gray-200 mb-1"><span class="text-[11px] font-bold text-gray-500 block">나의 해석</span><p class="text-gray-800">' + escapeHtml(ex.userTranslation) + '</p></div><p class="text-[13px] text-gray-700">' + escapeHtml(ex.feedback) + '</p></div>'; }).join('') : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
         '<div class="mb-4"><h3 class="text-base font-bold flex items-center gap-2 mb-2"><i data-lucide="pen-tool" class="w-4 h-4 text-purple-600"></i> 영작 연습</h3><div class="bg-purple-50/30 p-3 rounded-lg border border-purple-100 text-[13px]">' + (state.evaluation.writing.text ? '<p class="font-bold text-gray-900 mb-1">' + escapeHtml(state.evaluation.writing.text) + '</p><div class="bg-white p-2 rounded border border-gray-200 mb-1"><span class="text-[11px] font-bold text-gray-500 block">나의 영작</span><p class="text-gray-800 font-mono">' + escapeHtml(state.evaluation.writing.userWriting) + '</p></div><p class="text-[13px] text-gray-700">' + escapeHtml(state.evaluation.writing.feedback) + '</p>' : '<p class="text-gray-500 text-sm italic">기록 없음</p>') + '</div></div>' +
-        '<div class="text-center text-xs text-gray-400 mt-4 border-t pt-3">Generated by 김수석 영어 사전</div>' +
+        '<div class="text-center text-xs text-gray-400 mt-4 border-t pt-3">ⓒ 2026. 수석의방 All rights reserved.</div>' +
         '</div></div>';
       lucide.createIcons();
       document.getElementById('report-back-btn').addEventListener('click', function () {
@@ -998,7 +1007,6 @@
         render();
         scrollToBottom();
       });
-      document.getElementById('report-save-btn').addEventListener('click', function () { saveWord(); });
       document.getElementById('report-pdf-btn').addEventListener('click', downloadPdf);
     }
 
