@@ -473,6 +473,9 @@
       // ⭐ 핵심: 녹음 버튼 - onclick으로 직접 바인딩 (addEventListener 대신)
       document.querySelectorAll('[data-action="record"]').forEach(btn => {
         btn.onclick = function (e) {
+          // input=file에서 발생한 클릭(버블링)이면 무시하고 기본 탐색기가 열리도록 냅둠
+          if (e.target.tagName && e.target.tagName.toLowerCase() === 'input') return;
+          
           e.preventDefault();
           if (state.isRecording) stopRecording(this.dataset.type);
           else startRecording(this, this.dataset.type, this.dataset.id);
@@ -538,23 +541,30 @@
     // ⭐ 녹음 기능 (모바일 호환성 핵심 수정)
     // =====================
     /**
-     * 동기 함수로 녹음 시작 - iOS Safari 사용자 제스처 컨텍스트 유지
+     * 동기 함수로 녹음 시작 - iOS Safari 사용자 제스처 컨텍스트 유지 및 폴백 제공
      * async/await 대신 Promise.then() 체이닝 사용
      */
     function startRecording(btn, type, id) {
       // 1. 보안 컨텍스트 확인 (HTTPS 필수)
       if (!window.isSecureContext) {
-        showToast('HTTPS 환경에서만 녹음이 가능합니다.', 4000);
+        showToast('HTTPS 환경에서만 브라우저 마이크 접근이 가능합니다.', 4000);
+        showFallbackInput(btn, type, '대안으로 파일 첨부/기본 녹음기를 띄웁니다.');
+        return;
+      }
+
+      // 모바일 인앱 브라우저 감지 (카카오톡, 네이버, 인스타그램 등)
+      const userAgent = navigator.userAgent.toLowerCase();
+      const inAppBrowser = /kakaotalk|instagram|fban|fbav|line|naver|daum/i.test(userAgent);
+      
+      if (inAppBrowser) {
+        // 인앱 브라우저는 getUserMedia가 막힌 경우가 많으므로 바로 폴백 실행
+        showFallbackInput(btn, type, '인앱 브라우저 보안 정책에 따라 파일 업로드(녹음기)로 자동 전환합니다.');
         return;
       }
 
       // 2. API 지원 확인
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        showToast('이 브라우저에서는 녹음을 지원하지 않습니다.');
-        return;
-      }
-      if (typeof MediaRecorder === 'undefined') {
-        showToast('녹음 기능을 지원하지 않습니다.');
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+        showFallbackInput(btn, type, '브라우저 녹음이 지원되지 않아 파일 업로드 폴백으로 전환합니다.');
         return;
       }
 
@@ -597,9 +607,8 @@
 
           recorder.onerror = function (e) {
             console.error('MediaRecorder 에러:', e);
-            showToast('녹음 중 오류 발생');
+            showFallbackInput(btn, type, '녹음 중 오류가 발생하여 오프라인 모드로 전환합니다.');
             state.isRecording = false;
-            resetRecordButton(btn);
           };
 
           // 녹음 시작
@@ -616,29 +625,65 @@
         })
         .catch(function (err) {
           console.error('마이크 접근 실패:', err);
-          resetRecordButton(btn);
-
           let message = '마이크 접근에 실패했습니다.';
           if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-            message = '마이크 권한이 필요합니다.\n주소창 옆 🔒 아이콘에서 마이크를 허용해주세요.';
+            message = '마이크 권한이 차단되었습니다. 대신 기본 녹음앱 호출 버튼을 엽니다.';
           } else if (err.name === 'NotFoundError') {
-            message = '마이크를 찾을 수 없습니다.';
-          } else if (err.name === 'NotReadableError') {
-            message = '마이크가 다른 앱에서 사용 중입니다.';
-          } else if (err.name === 'SecurityError') {
-            message = 'HTTPS 환경인지 확인해주세요.';
+            message = '마이크 모듈을 찾을 수 없어 파일 첨부 기능으로 전환합니다.';
+          } else {
+            message = `권한 문제(${err.name})로 파일 첨부 폴백 기능으로 전환합니다.`;
           }
-          showToast(message, 5000);
+          showFallbackInput(btn, type, message);
         });
     }
 
+    function showFallbackInput(btn, type, alertMessage) {
+      resetRecordButton(btn);
+      if (alertMessage) showToast(alertMessage, 4500);
+      
+      btn.classList.add('relative', 'overflow-hidden', 'bg-blue-600', 'hover:bg-blue-700', 'active:scale-95');
+      btn.classList.remove('bg-gray-800', 'hover:bg-gray-700', 'opacity-50', 'bg-red-500', 'animate-pulse');
+      btn.innerHTML = '<i data-lucide="folder-open" class="w-6 h-6 text-white"></i>';
+      
+      const label = btn.parentElement.querySelector('.record-label');
+      if (label) {
+        label.innerHTML = '<span class="text-blue-600 font-bold text-[13px]">오프라인 녹음기로 전환됨</span><br/>터치해서 파일/녹음 추가';
+      }
+
+      const existingInput = btn.querySelector('input[type="file"]');
+      if (existingInput) existingInput.remove();
+
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'audio/*';
+      fileInput.className = 'absolute inset-0 w-full h-full opacity-0 cursor-pointer';
+      
+      fileInput.onchange = function(e) {
+        const file = e.target.files[0];
+        if (file) {
+          showToast('오디오 파일을 분석 중입니다...', 2000);
+          resetRecordButton(btn); // 로딩 UI를 위해 초기 상태로 복귀
+          btn.classList.add('opacity-50');
+          btn.innerHTML = '<div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>';
+          handleRecordingComplete(file, type);
+        }
+      };
+      
+      btn.appendChild(fileInput);
+      lucide.createIcons();
+    }
+
     function resetRecordButton(btn) {
-      btn.classList.remove('opacity-50', 'bg-red-500', 'animate-pulse');
-      btn.classList.add('bg-gray-800', 'hover:bg-gray-700');
+      btn.classList.remove('opacity-50', 'bg-red-500', 'animate-pulse', 'relative', 'overflow-hidden', 'bg-blue-600', 'hover:bg-blue-700');
+      btn.classList.add('bg-gray-800', 'hover:bg-gray-700', 'active:scale-95');
       btn.disabled = false;
       btn.innerHTML = '<i data-lucide="mic" class="w-6 h-6"></i>';
       const label = btn.parentElement?.querySelector('.record-label');
       if (label) label.textContent = '버튼을 눌러 녹음 시작';
+      
+      const existingInput = btn.querySelector('input[type="file"]');
+      if (existingInput) existingInput.remove();
+      
       lucide.createIcons();
     }
 
@@ -650,6 +695,11 @@
     }
 
     async function handleRecordingComplete(audioBlob, boxType) {
+      // 파일 업로드 폴백 시 type이 빈 문자열일 수 있으므로 기본값 강제 할당 (MIME 매칭 오류 방지)
+      if (!audioBlob.type) {
+        audioBlob = new Blob([audioBlob], { type: 'audio/mp4' }); 
+      }
+      
       const blobUrl = createBlobUrl(audioBlob);
       const msgId = generateId();
       state.messages.push({ id: msgId, role: 'user', type: 'audio', blobUrl });
