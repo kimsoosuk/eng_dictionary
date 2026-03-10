@@ -823,7 +823,8 @@
       // 녹음 버튼
       document.querySelectorAll('[data-action="record"]').forEach(btn => {
         btn.addEventListener('click', async (e) => {
-          e.preventDefault();
+          // 모바일(Safari/Chrome)에서 preventDefault가 사용자 제스처 토큰을 파손시켜 
+          // NotAllowedError를 즉시 유발할 수 있으므로 제거합니다.
           const type = btn.dataset.type;
           const id = btn.dataset.id;
 
@@ -1038,15 +1039,21 @@
           return;
         }
 
-        // 마이크 권한 요청 (기존 스트림이 없거나 비활성화된 경우에만 새로 요청)
-        // Windows 환경 등에서 높은 제약(sampleRate 등) 때문에 권한 획득이 아예 실패하는 것을 막기 위해 가장 기본적인 오디오만 요청합니다.
-        let stream = state.currentStream;
-        if (!stream || !stream.active) {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: true
-          });
-          state.currentStream = stream;
+        // 확실한 하드웨어 반납: 모바일 Safari 및 Chrome에서 이전 스트림이 조금이라도 살아있으면 
+        // NotAllowedError 또는 NotReadableError를 곧바로 던짐
+        if (state.currentStream) {
+          state.currentStream.getTracks().forEach(track => track.stop());
+          state.currentStream = null;
         }
+
+        // 안정적인 오디오 속성만 요구하여 항상 새로운 스트림을 받아옵니다.
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true
+          }
+        });
+        state.currentStream = stream;
 
         // MIME 타입 선택 (iOS 호환성)
         const mimeType = getRecordingMimeType();
@@ -1064,6 +1071,12 @@
         state.mediaRecorder.onstop = () => {
           const actualMimeType = state.mediaRecorder.mimeType || mimeType || 'audio/mp4';
           const audioBlob = new Blob(state.audioChunks, { type: actualMimeType });
+
+          // 녹음이 끝나는 순간 곧장 하드웨어 제어권을 운영체제로 반납 (iOS Safari 버그 방어)
+          if (state.currentStream) {
+            state.currentStream.getTracks().forEach(track => track.stop());
+            state.currentStream = null;
+          }
 
           handleRecordingComplete(audioBlob, type);
         };
@@ -1091,22 +1104,24 @@
       } catch (err) {
         console.error('녹음 시작 실패:', err);
 
-        let message = `마이크 접근에 실패했습니다. (${err.name})`;
-        let useAlert = false;
-        
+        let message = `마이크 접근에 실패했습니다. (${err.name}: ${err.message || ''})`;
+        let useToast = true;
+
         if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
-          message = '⚠️ 마이크 권한 거부 지속됨\n\n설정에서 마이크를 이미 [허용]했는데도 권한이 거부된다면 다음 대표적인 원인일 수 있습니다!\n\n1. 홈 화면 추가 앱 단축 아이콘 또는 사내/메신저 앱(카톡 등) 내부 화면인 경우 (반드시 기본 Safari/Chrome 앱을 켜고 주소를 복사해서 들어가주세요)\n2. 현재 휴대폰에서 영상 통화, 음악 앱 등이 마이크를 선점하고 있는 경우\n3. 일부 Android 기기의 구글 어시스턴트 충돌';
-          useAlert = true;
+          // 데스크톱은 잘 되지만 모바일만 계속 권한거부가 뜨는 경우 가장 흔한 이유는, 브라우저의 탭이나 화면 내에서 마이크를 
+          // 초기화하지 못하고 백그라운드에 물려있는 상태(Lock)이거나, 사용자 제스처 토큰이 만료된 경우입니다.
+          message = '⚠️ 마이크 권한이 거부되었습니다.\n\n안드로이드나 아이폰의 [설정] 앱에서 Safari/Chrome의 마이크 권한이 켜져 있는지 확인해주세요. \n\n만약 이미 켜져 있다면 브라우저의 보안 버그일 수 있으니, 열려있는 탭을 "완전히 닫은 뒤" 새 창을 열고 주소를 다시 붙여넣어 접속해주세요!';
+          useToast = false;
         } else if (err.name === 'NotFoundError') {
-          message = '마이크 모듈을 찾을 수 없거나 연결되지 않았습니다.';
+          message = '마이크 모듈을 찾을 수 없습니다. 마이크 연결 기기를 확인해주세요.';
         } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-          message = '마이크 하드웨어 오류로 접근이 불가능합니다. 기기를 재부팅해보세요.';
+          message = '마이크가 이미 시스템의 다른 앱(전화 등)에서 사용 중이라 접근할 수 없거나, 하드웨어 오류가 있습니다.';
         }
 
-        if (useAlert) {
-          alert(message);
+        if (useToast) {
+          showToast(message, 5000);
         } else {
-          showToast(message, 4000);
+          alert(message);
         }
       }
     }
