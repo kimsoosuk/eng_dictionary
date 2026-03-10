@@ -1045,8 +1045,11 @@
           state.currentStream = null;
         }
 
-        // 하드웨어가 마이크 자원을 반환할 수 있게 아주 짧은 텀(50ms)을 둔 뒤 MediaDevices를 호출합니다
-        await new Promise(resolve => setTimeout(resolve, 50));
+        // --- 핵심 원인 수정 ---
+        // iOS Safari 18에서는 사용자 클릭 직후(User Gesture) "동기적"으로 getUserMedia가 호출되지 않고
+        // 중간에 await setTimeout 등으로 딜레이가 생기면, "사용자가 직접 누른 것"으로 인정하지 않고 
+        // 권한 팝업 없이 즉각 NotAllowedError를 던집니다. (보안 정책 강화)
+        // 따라서 딜레이 코드를 삭제하고 곧바로 마이크를 요청합니다.
 
         // 모바일에서의 NotAllowedError/SecurityError 등 우회:
         // 제약조건(constraints)에 아무것도 넣지 않은 순수한 { audio: true }
