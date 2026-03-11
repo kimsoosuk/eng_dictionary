@@ -99,9 +99,11 @@
   </style>
 </head>
 
-<body class="bg-gray-50">
-  <div id="app" class="w-full h-[100dvh] flex justify-center overflow-hidden text-gray-800">
-    <div id="main-container" class="w-full max-w-md bg-white h-full flex flex-col relative shadow-xl overflow-hidden">
+<body class="bg-white">
+  <div id="app"
+    class="w-full h-[100dvh] p-4 sm:p-6 md:p-8 flex justify-center items-center overflow-hidden text-gray-800 transition-all duration-300">
+    <div id="main-container"
+      class="w-full max-w-md bg-white w-full h-full max-h-[900px] flex flex-col relative shadow-2xl overflow-hidden rounded-[2rem] sm:rounded-[2.5rem] border border-gray-50 ring-1 ring-gray-900/5 transition-all duration-300">
     </div>
   </div>
 
@@ -340,7 +342,17 @@
     // 렌더링
     // =====================
     function render() {
+      const app = document.getElementById('app');
       const container = document.getElementById('main-container');
+
+      if (state.view === 'home') {
+        app.className = 'w-full h-[100dvh] p-4 sm:p-6 md:p-8 flex justify-center items-center overflow-hidden text-gray-800 transition-all duration-300';
+        container.className = 'w-full max-w-md bg-white w-full h-full max-h-[900px] flex flex-col relative shadow-2xl overflow-hidden rounded-[2rem] sm:rounded-[2.5rem] border border-gray-50 ring-1 ring-gray-900/5 transition-all duration-300';
+      } else {
+        app.className = 'w-full h-[100dvh] p-0 flex justify-center items-center overflow-hidden text-gray-800 transition-all duration-300';
+        container.className = 'w-full max-w-md bg-white w-full h-full flex flex-col relative shadow-none overflow-hidden rounded-none border-none ring-0 transition-all duration-300';
+      }
+
       if (state.view === 'home' || state.view === 'report') revokeAllBlobUrls();
       if (state.view === 'home') renderHomeView(container);
       else if (state.view === 'chat') renderChatView(container);
@@ -366,8 +378,9 @@
             ${state.vocabList.length === 0 ? `<div class="text-center text-gray-400 py-10 bg-gray-50 rounded-xl border border-dashed border-gray-200">아직 저장한 단어가 없네.<br/>새롭게 배운 단어는 꼭 기록해두자!</div>` : `
               <div class="w-full flex flex-col pb-6">
                 <ul class="space-y-3">${displayedVocab.map(item => `
-                  <li class="bg-white border border-gray-200 p-4 rounded-xl shadow-sm flex flex-col gap-2">
-                    <div class="flex items-baseline gap-2 flex-wrap"><span class="font-bold text-xl text-gray-900">${escapeHtml(item.word)}</span><span class="text-gray-500 text-sm">[${escapeHtml(item.pos || '')}] [${escapeHtml(item.phonetics || '')}]</span></div>
+                  <li class="bg-white border border-gray-200 p-4 rounded-xl shadow-sm flex flex-col gap-2 relative group">
+                    <button type="button" data-action="delete-word" data-word="${escapeHtml(item.word)}" class="absolute top-3 right-3 p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="삭제"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                    <div class="flex items-baseline gap-2 flex-wrap pr-10"><span class="font-bold text-xl text-gray-900">${escapeHtml(item.word)}</span><span class="text-gray-500 text-sm">[${escapeHtml(item.pos || '')}] [${escapeHtml(item.phonetics || '')}]</span></div>
                     <div class="flex flex-col gap-1 mt-1">${(item.meanings || []).map(m => `<span class="text-blue-700 font-medium text-[15px]">• ${escapeHtml(m)}</span>`).join('')}</div>
                     ${item.example ? `<div class="text-gray-600 text-sm mt-2 bg-gray-50 p-3 rounded-lg italic">"${escapeHtml(item.example)}"</div>` : ''}
                   </li>`).join('')}</ul>
@@ -509,6 +522,24 @@
       // 홈으로 버튼
       if (e.target.closest('[data-action="go-home-btn2"]')) {
         goHome();
+        return;
+      }
+
+      // 단어 삭제 버튼
+      const deleteWordBtn = e.target.closest('[data-action="delete-word"]');
+      if (deleteWordBtn) {
+        const wordToDelete = deleteWordBtn.dataset.word;
+        if (confirm(`'${wordToDelete}'을(를) 단어장에서 삭제하시겠습니까?`)) {
+          state.vocabList = state.vocabList.filter(item => item.word !== wordToDelete);
+          saveVocabList();
+
+          const totalPages = Math.ceil(state.vocabList.length / CONFIG.ITEMS_PER_PAGE);
+          if (state.currentPage > totalPages && totalPages > 0) {
+            state.currentPage = totalPages;
+          }
+          render();
+          showToast('삭제되었습니다.');
+        }
         return;
       }
     });
